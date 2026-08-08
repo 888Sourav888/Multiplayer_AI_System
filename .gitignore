@@ -1,0 +1,39 @@
+# Built binaries & build output
+**/target/
+**/build/
+
+# Local File Storage (Uploaded session snapshots, blobs)
+**/data/
+data/
+
+# Logs
+*.log
+**/logs/
+
+# IDE / Editor specific files
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.classpath
+.project
+.settings/
+.factorypath
+.apt_generated
+.springBeans
+.sts4-cache
+
+# OS generated files
+.DS_Store
+.DS_Store?
+ehthumbs.db
+Icon?
+Thumbs.db
+desktop.ini
+
+# Environment / Secret configs
+*.env
+*.env.local
+**/application.properties
+!**/application.properties.dummy
