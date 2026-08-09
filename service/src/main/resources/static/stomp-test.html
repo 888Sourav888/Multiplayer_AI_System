@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplayer AI - WebSocket Patch Test</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1e1e2e; color: #cdd6f4; margin: 20px; }
+        .container { max-width: 900px; margin: 0 auto; background: #181825; padding: 24px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+        h2 { color: #89b4fa; margin-top: 0; }
+        .form-group { margin-bottom: 16px; }
+        label { display: block; font-weight: bold; margin-bottom: 6px; color: #a6adc8; }
+        input, textarea { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #45475a; background: #313244; color: #cdd6f4; font-family: monospace; box-sizing: border-box; }
+        button { background: #89b4fa; color: #11111b; border: none; padding: 10px 18px; font-weight: bold; border-radius: 6px; cursor: pointer; transition: 0.2s; }
+        button:hover { background: #b4befe; }
+        button:disabled { background: #585b70; cursor: not-allowed; }
+        .status { padding: 8px 12px; border-radius: 6px; font-weight: bold; display: inline-block; margin-bottom: 16px; }
+        .status.connected { background: #a6e3a1; color: #11111b; }
+        .status.disconnected { background: #f38ba8; color: #11111b; }
+        #logs { height: 250px; overflow-y: auto; background: #11111b; padding: 12px; border-radius: 6px; border: 1px solid #45475a; }
+        .log-entry { margin-bottom: 8px; padding: 6px; border-left: 3px solid #89b4fa; background: #181825; font-size: 13px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h2>🚀 Multiplayer AI - WebSocket Patch Simulator</h2>
+    <div id="connectionStatus" class="status disconnected">Disconnected</div>
+
+    <div class="form-group">
+        <label>Session ID (UUID)</label>
+        <input type="text" id="sessionId" value="1fd3997e-d94f-4aab-8b1a-d76aeb2131eb">
+    </div>
+
+    <div class="form-group">
+        <label>Sender User ID (UUID)</label>
+        <input type="text" id="senderId" value="43ed29ce-4760-4eb8-b1b0-6fdd1ee7594b">
+    </div>
+
+    <button id="connectBtn" onclick="connect()">Connect & Subscribe</button>
+    <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+
+    <hr style="border-color: #45475a; margin: 24px 0;">
+
+    <h3>Send File Patch</h3>
+    <div class="form-group">
+        <label>File Path from Root</label>
+        <input type="text" id="filePath" value="src/main/java/com/multiplayerai/App.java">
+    </div>
+    <div class="form-group">
+        <label>File Changes (Patch Content)</label>
+        <textarea id="fileChanges" rows="3">+ System.out.println("Live patch broadcast test!");</textarea>
+    </div>
+    <button id="sendBtn" onclick="sendPatch()" disabled>Broadcast Patch</button>
+
+    <h3>Live Event Stream</h3>
+    <div id="logs"></div>
+</div>
+
+<script>
+    let stompClient = null;
+
+    function log(msg, isError = false) {
+        const logsDiv = document.getElementById('logs');
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+        if (isError) entry.style.borderLeftColor = '#f38ba8';
+        entry.innerHTML = `<strong>[${new Date().toLocaleTimeString()}]</strong> ${msg}`;
+        logsDiv.appendChild(entry);
+        logsDiv.scrollTop = logsDiv.scrollHeight;
+    }
+
+    function connect() {
+        const socket = new SockJS('/ws-multiplayer');
+        stompClient = Stomp.over(socket);
+
+        stompClient.connect({}, function (frame) {
+            document.getElementById('connectionStatus').innerText = 'Connected';
+            document.getElementById('connectionStatus').className = 'status connected';
+            document.getElementById('connectBtn').disabled = true;
+            document.getElementById('disconnectBtn').disabled = false;
+            document.getElementById('sendBtn').disabled = false;
+
+            const sessionId = document.getElementById('sessionId').value.trim();
+            const topic = '/topic/session/' + sessionId;
+
+            log('Connected to WebSocket server. Subscribing to topic: ' + topic);
+
+            stompClient.subscribe(topic, function (message) {
+                const body = JSON.parse(message.body);
+                log(`<strong>Broadcast Received!</strong> <br><pre>${JSON.stringify(body, null, 2)}</pre>`);
+            });
+        }, function (error) {
+            log('Connection error: ' + error, true);
+        });
+    }
+
+    function disconnect() {
+        if (stompClient !== null) {
+            stompClient.disconnect();
+        }
+        document.getElementById('connectionStatus').innerText = 'Disconnected';
+        document.getElementById('connectionStatus').className = 'status disconnected';
+        document.getElementById('connectBtn').disabled = false;
+        document.getElementById('disconnectBtn').disabled = true;
+        document.getElementById('sendBtn').disabled = true;
+        log('Disconnected from server.');
+    }
+
+    function sendPatch() {
+        const sessionId = document.getElementById('sessionId').value.trim();
+        const senderId = document.getElementById('senderId').value.trim();
+        const filePath = document.getElementById('filePath').value.trim();
+        const fileChanges = document.getElementById('fileChanges').value;
+
+        const payload = {
+            type: "PATCH_TRANSFER",
+            sessionId: sessionId,
+            senderId: senderId,
+            timestamp: Date.now(),
+            patches: [
+                {
+                    filePathFromRoot: filePath,
+                    fileChanges: fileChanges
+                }
+            ]
+        };
+
+        const destination = '/app/session/' + sessionId + '/patch';
+        stompClient.send(destination, {}, JSON.stringify(payload));
+        log(`Sent patch frame to <code>${destination}</code>`);
+    }
+</script>
+</body>
+</html>

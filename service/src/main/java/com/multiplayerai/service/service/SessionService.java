@@ -48,11 +48,9 @@ public class SessionService {
     public SessionResponse createSession(CreateSessionRequest request) {
         UUID ownerId = request.getOwnerId();
 
-        // Ensure user exists, if not create default user entity
-        UserEntity owner = userRepository.findById(ownerId).orElseGet(() -> {
-            UserEntity newUser = new UserEntity(ownerId, "user_" + ownerId.toString().substring(0, 8), ownerId + "@example.com", null);
-            return userRepository.save(newUser);
-        });
+        // Fetch owner user, throwing ResourceNotFoundException if user does not exist
+        UserEntity owner = userRepository.findById(ownerId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found with ID: " + ownerId + ". Please create a user first before creating a session."));
 
         // Enforce max active sessions per owner
         long activeCount = sessionRepository.countByOwnerIdAndStatus(ownerId, SessionStatus.ACTIVE);
@@ -60,17 +58,18 @@ public class SessionService {
             throw new SessionLimitExceededException("Owner " + ownerId + " has reached the maximum allowed active sessions limit (" + maxSessionsPerOwner + ").");
         }
 
-        // Create session entity to get ID generated
+        // Initialize session entity without manually setting ID to let @GeneratedValue work properly
         SessionEntity session = new SessionEntity();
         session.setName(request.getName());
         session.setOwnerId(owner.getId());
+        session.setProjectStoragePath("PENDING");
         session.setCurrentVersion(1L);
         session.setStatus(SessionStatus.ACTIVE);
 
-        // Pre-save to get UUID
+        // Initial persist to get generated UUID from JPA
         session = sessionRepository.save(session);
 
-        // Setup server-side directory for this session
+        // Create server-side directory using generated UUID
         String storagePath = fileStorageService.createSessionDirectory(session.getId());
         session.setProjectStoragePath(storagePath);
         session = sessionRepository.save(session);
