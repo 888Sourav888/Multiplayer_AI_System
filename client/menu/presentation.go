@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -186,6 +187,9 @@ func handleJoinSession(reader *bufio.Reader, userID string, service *MenuService
 		if !syncOwnerSessionState(joined, userID, service) {
 			return
 		}
+		if !syncMemberSessionState(joined, userID, service) {
+			return
+		}
 		fmt.Println(service.FormatSessionDetail(joined))
 		fmt.Println()
 
@@ -213,6 +217,9 @@ func handleJoinSession(reader *bufio.Reader, userID string, service *MenuService
 
 		fmt.Println("✓ Successfully joined session!")
 		if !syncOwnerSessionState(joined, userID, service) {
+			return
+		}
+		if !syncMemberSessionState(joined, userID, service) {
 			return
 		}
 		fmt.Println(service.FormatSessionDetail(joined))
@@ -272,6 +279,65 @@ func syncOwnerSessionState(joined *Session, userID string, service *MenuService)
 	}
 	return true
 }
+
+// syncMemberSessionState synchronizes a non-owner member's local workspace.
+// If Git session: checks out the designated branch.
+// If Zip session: cleans directory and downloads & extracts the latest zip archive.
+func syncMemberSessionState(joined *Session, userID string, service *MenuService) bool {
+	if joined.OwnerID == userID {
+		return true // Owner state is updated in syncOwnerSessionState
+	}
+
+	if joined.GitRepoUrl != "" {
+		fmt.Printf("Git session detected. Synchronizing codebase...\n")
+		// Check if we are inside a local Git repo
+		_, isGit := GetGitInfo()
+		if !isGit {
+			fmt.Println("✗ Error: This is a Git-tracked session, but your local folder is not a Git repository.")
+			fmt.Println("Please run 'git init' or clone the project repository first.")
+			return false
+		}
+
+		fmt.Printf("Switching local workspace branch to: %s\n", joined.GitBranch)
+		cmd := exec.Command("git", "checkout", joined.GitBranch)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("✗ Failed to switch branch: %v\n\n", err)
+			return false
+		}
+		fmt.Println("✓ Local workspace successfully switched to branch!")
+	} else {
+		fmt.Println("Non-Git session detected. Downloading latest workspace snapshot...")
+		// If version is 1, maybe no snapshot is uploaded yet. Let's check current version.
+		if joined.CurrentVersion < 2 {
+			fmt.Println("No workspace snapshots are available for this session yet.")
+			return true
+		}
+
+		// Download zip bytes
+		zipBytes, err := service.DownloadSnapshot(joined.ID, joined.CurrentVersion)
+		if err != nil {
+			fmt.Printf("✗ Failed to download snapshot from server: %v\n\n", err)
+			return false
+		}
+
+		fmt.Println("Cleaning local workspace (excluding client binary and config)...")
+		if err := CleanDirectory("."); err != nil {
+			fmt.Printf("✗ Failed to clean directory: %v\n\n", err)
+			return false
+		}
+
+		fmt.Println("Extracting workspace snapshot files...")
+		if err := UnzipBytes(zipBytes, "."); err != nil {
+			fmt.Printf("✗ Failed to extract snapshot files: %v\n\n", err)
+			return false
+		}
+		fmt.Println("✓ Workspace successfully synchronized to latest server snapshot!")
+	}
+	return true
+}
+
 
 // handleDeleteSession runs the interactive delete sub-flow.
 func handleDeleteSession(reader *bufio.Reader, userID string, service *MenuService) {

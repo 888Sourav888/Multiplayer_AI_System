@@ -3,6 +3,7 @@ package menu
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -133,4 +134,82 @@ func ZipDirectory(src string) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+// CleanDirectory removes all files and directories in the target path,
+// skipping output binaries, config.json, and hidden files/directories.
+func CleanDirectory(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		// Skip executable, config.json, and hidden files/directories (like .git, .env)
+		if strings.HasSuffix(name, ".exe") || name == "multiplayer_ai_client" || name == "config.json" || strings.HasPrefix(name, ".") {
+			continue
+		}
+
+		path := filepath.Join(dir, name)
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("failed to remove %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+// UnzipBytes extracts a zip archive payload in-memory into the destination directory.
+// Includes path traversal checks to avoid Zip Slip vulnerability.
+func UnzipBytes(zipBytes []byte, dest string) error {
+	absDest, err := filepath.Abs(dest)
+	if err != nil {
+		return fmt.Errorf("failed to resolve absolute path of destination: %w", err)
+	}
+
+	reader, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+	if err != nil {
+		return fmt.Errorf("failed to open zip reader: %w", err)
+	}
+
+	for _, file := range reader.File {
+		// Prevent Zip Slip vulnerability
+		path := filepath.Clean(filepath.Join(absDest, file.Name))
+		if !strings.HasPrefix(path, absDest) {
+			continue
+		}
+
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(path, file.Mode()); err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", path, err)
+			}
+			continue
+		}
+
+		// Ensure parent directory exists
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return fmt.Errorf("failed to create parent directory for %s: %w", path, err)
+		}
+
+		// Open and extract file
+		rc, err := file.Open()
+		if err != nil {
+			return fmt.Errorf("failed to open file %s in zip: %w", file.Name, err)
+		}
+
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
+		if err != nil {
+			rc.Close()
+			return fmt.Errorf("failed to open destination file %s: %w", path, err)
+		}
+
+		_, err = io.Copy(f, rc)
+		rc.Close()
+		f.Close()
+		if err != nil {
+			return fmt.Errorf("failed to extract file %s: %w", file.Name, err)
+		}
+	}
+
+	return nil
 }

@@ -262,3 +262,25 @@ func (c *APIClient) UploadSnapshot(sessionID string, zipBytes []byte) (*Snapshot
 	return &snapshot, nil
 }
 
+// DownloadSnapshot downloads a specific snapshot ZIP by version.
+func (c *APIClient) DownloadSnapshot(sessionID string, version int) ([]byte, error) {
+	url := fmt.Sprintf("%s/api/sessions/%s/snapshots/%d/download", c.BaseURL, sessionID, version)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("backend returned non-OK status: %s (body: %s)", resp.Status, string(body))
+	}
+
+	return body, nil
+}
+

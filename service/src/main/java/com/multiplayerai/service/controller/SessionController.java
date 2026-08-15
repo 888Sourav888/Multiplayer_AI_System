@@ -12,6 +12,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
 
 import java.util.List;
 import java.util.UUID;
@@ -104,5 +106,20 @@ public class SessionController {
             @RequestParam("userId") UUID userId) {
         SessionResponse response = sessionService.joinSession(sessionId, userId);
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * 6. Download Snapshot
+     * Downloads a specific session snapshot ZIP by version.
+     */
+    @GetMapping("/{sessionId}/snapshots/{version}/download")
+    public ResponseEntity<Resource> downloadSnapshot(
+            @PathVariable UUID sessionId,
+            @PathVariable Long version) {
+        Resource resource = sessionService.loadSnapshotAsResource(sessionId, version);
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"snapshot_v" + version + ".zip\"")
+                .body(resource);
     }
 }

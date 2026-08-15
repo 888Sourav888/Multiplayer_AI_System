@@ -16,6 +16,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
+import com.multiplayerai.service.exception.StorageException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -252,5 +257,26 @@ public class SessionService {
         sessionRepository.save(session);
 
         return SessionResponse.fromEntity(session);
+    }
+
+    /**
+     * Loads a specific snapshot as a Resource for downloading.
+     */
+    @Transactional(readOnly = true)
+    public Resource loadSnapshotAsResource(UUID sessionId, Long version) {
+        SnapshotEntity snapshot = snapshotRepository.findBySessionIdAndVersion(sessionId, version)
+                .orElseThrow(() -> new ResourceNotFoundException("Snapshot version " + version + " not found for session " + sessionId));
+
+        try {
+            Path filePath = Paths.get(snapshot.getStorageLocation()).toAbsolutePath().normalize();
+            Resource resource = new UrlResource(filePath.toUri());
+            if (resource.exists() && resource.isReadable()) {
+                return resource;
+            } else {
+                throw new ResourceNotFoundException("Snapshot file not found or not readable at " + snapshot.getStorageLocation());
+            }
+        } catch (java.net.MalformedURLException e) {
+            throw new StorageException("Malformed URL for snapshot location: " + snapshot.getStorageLocation(), e);
+        }
     }
 }

@@ -115,3 +115,8 @@ func (s *MenuService) UpdateSessionGitInfo(sessionID string, gitRepo string, git
 func (s *MenuService) GetBaseURL() string {
 	return s.apiClient.BaseURL
 }
+
+// DownloadSnapshot downloads the zipped workspace bytes of a specific session version.
+func (s *MenuService) DownloadSnapshot(sessionID string, version int) ([]byte, error) {
+	return s.apiClient.DownloadSnapshot(sessionID, version)
+}
