@@ -2,7 +2,9 @@ package session
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // SessionService manages the business logic for the active session room.
@@ -42,11 +44,17 @@ func (ss *SessionService) FormatSessionInfo(s *Session) string {
 
 // SendSimulatedPatch formats and sends a patch message via WebSocket.
 func (ss *SessionService) SendSimulatedPatch(sessionID string, userID string, filePath string, content string) error {
-	// Build a simulated patch object matching the expected backend DTO structure
-	patchItem := map[string]interface{}{
-		"filePath":      filePath,
-		"patchContent":  content,
-		"status":        "PENDING",
+	patchItem := FilePatchItem{
+		FilePathFromRoot: filePath,
+		FileName:         filepath.Base(filePath),
+		FileExtension:    filepath.Ext(filePath),
+		Operation:        "WRITE",
+		SizeBytes:        int64(len(content)),
+		Modifier:         "User",
+		IsAiEdit:         false,
+		IsWholeFile:      true,
+		ContentDelta:     "",
+		FileChanges:      content,
 	}
 
 	payload := WSMessage{
@@ -54,10 +62,16 @@ func (ss *SessionService) SendSimulatedPatch(sessionID string, userID string, fi
 		SessionID: sessionID,
 		SenderID:  userID,
 		Message:   fmt.Sprintf("Sent patch for %s", filePath),
-		Patches:   []interface{}{patchItem},
+		Patches:   []FilePatchItem{patchItem},
+		Timestamp: time.Now().UnixNano() / int64(time.Millisecond),
 	}
 
 	return ss.backend.SendMessage(payload)
+}
+
+// SendWSMessage sends a WSMessage over the backend socket.
+func (ss *SessionService) SendWSMessage(msg WSMessage) error {
+	return ss.backend.SendMessage(msg)
 }
 
 // Close disconnects the live session.

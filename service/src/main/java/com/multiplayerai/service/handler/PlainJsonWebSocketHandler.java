@@ -32,10 +32,18 @@ public class PlainJsonWebSocketHandler extends TextWebSocketHandler {
     // Map of WebSocketSession.getId() -> subscribed sessionId
     private final Map<String, UUID> sessionToRoomMap = new ConcurrentHashMap<>();
 
+    private void sendJsonMessage(WebSocketSession session, Map<String, Object> payload) throws IOException {
+        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(payload)));
+    }
+
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         System.out.println("[WebSocket Event] Insomnia Client Connected: " + session.getId());
-        session.sendMessage(new TextMessage("{\"status\":\"CONNECTED\",\"connectionId\":\"" + session.getId() + "\",\"message\":\"Connected to Multiplayer WebSocket Server\"}"));
+        Map<String, Object> connAck = new HashMap<>();
+        connAck.put("status", "CONNECTED");
+        connAck.put("connectionId", session.getId());
+        connAck.put("message", "Connected to Multiplayer WebSocket Server");
+        sendJsonMessage(session, connAck);
     }
 
     @Override
@@ -50,7 +58,10 @@ public class PlainJsonWebSocketHandler extends TextWebSocketHandler {
             if ("SUBSCRIBE".equalsIgnoreCase(type) || "JOIN".equalsIgnoreCase(type)) {
                 UUID sessionId = UUID.fromString(jsonNode.get("sessionId").asText());
                 subscribeSessionToRoom(session, sessionId);
-                session.sendMessage(new TextMessage("{\"status\":\"SUBSCRIBED\",\"sessionId\":\"" + sessionId + "\"}"));
+                Map<String, Object> subAck = new HashMap<>();
+                subAck.put("status", "SUBSCRIBED");
+                subAck.put("sessionId", sessionId);
+                sendJsonMessage(session, subAck);
                 return;
             }
 
@@ -72,10 +83,16 @@ public class PlainJsonWebSocketHandler extends TextWebSocketHandler {
             eventPublisher.publishEvent(event);
 
             // Acknowledge sender
-            session.sendMessage(new TextMessage("{\"status\":\"PATCH_RECEIVED\",\"message\":\"Patch broadcasted to session participants\"}"));
+            Map<String, Object> ack = new HashMap<>();
+            ack.put("status", "PATCH_RECEIVED");
+            ack.put("message", "Patch broadcasted to session participants");
+            sendJsonMessage(session, ack);
 
         } catch (Exception e) {
-            session.sendMessage(new TextMessage("{\"status\":\"ERROR\",\"error\":\"" + e.getMessage() + "\"}"));
+            Map<String, Object> err = new HashMap<>();
+            err.put("status", "ERROR");
+            err.put("error", e.getMessage());
+            sendJsonMessage(session, err);
         }
     }
 

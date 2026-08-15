@@ -22,15 +22,31 @@ type Session struct {
 	LastActiveAt       string `json:"lastActiveAt"`
 }
 
+// FilePatchItem represents a single file change diff/patch.
+type FilePatchItem struct {
+	FilePathFromRoot string `json:"filePathFromRoot"`
+	FileName         string `json:"fileName"`
+	FileExtension    string `json:"fileExtension"`
+	Operation        string `json:"operation"`
+	SizeBytes        int64  `json:"sizeBytes"`
+	Modifier         string `json:"modifier"`
+	IsAiEdit         bool   `json:"isAiEdit"`
+	IsRevert         bool   `json:"isRevert"`
+	IsWholeFile      bool   `json:"isWholeFile"`
+	ContentDelta     string `json:"contentDelta"`
+	FileChanges      string `json:"fileChanges"`
+}
+
 // WSMessage represents a generic message sent or received via WebSocket.
 type WSMessage struct {
-	Type      string      `json:"type,omitempty"`
-	Status    string      `json:"status,omitempty"`
-	SessionID string      `json:"sessionId,omitempty"`
-	Message   string      `json:"message,omitempty"`
-	SenderID  string      `json:"senderId,omitempty"`
-	Error     string      `json:"error,omitempty"`
-	Patches   interface{} `json:"patches,omitempty"`
+	Type      string          `json:"type,omitempty"`
+	Status    string          `json:"status,omitempty"`
+	SessionID string          `json:"sessionId,omitempty"`
+	Message   string          `json:"message,omitempty"`
+	SenderID  string          `json:"senderId,omitempty"`
+	Error     string          `json:"error,omitempty"`
+	Patches   []FilePatchItem `json:"patches,omitempty"`
+	Timestamp int64           `json:"timestamp,omitempty"`
 }
 
 // SessionBackend handles WebSocket connections and REST actions for an active session.
