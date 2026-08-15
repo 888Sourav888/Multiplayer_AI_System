@@ -3,6 +3,7 @@ package com.multiplayerai.service.service;
 import com.multiplayerai.service.dto.CreateSessionRequest;
 import com.multiplayerai.service.dto.SessionResponse;
 import com.multiplayerai.service.dto.SnapshotResponse;
+import com.multiplayerai.service.dto.UpdateSessionRequest;
 import com.multiplayerai.service.entity.*;
 import com.multiplayerai.service.enums.MemberRole;
 import com.multiplayerai.service.enums.SessionStatus;
@@ -113,22 +114,48 @@ public class SessionService {
     }
 
     /**
-     * /DeleteSession - Marks session as TERMINATED and cleans up local server storage.
+     * /UpdateSession - Partially updates a session's mutable fields (name, status).
+     * Only non-null fields in the request are applied.
      */
     @Transactional
-    public SessionResponse deleteSession(UUID sessionId) {
+    public SessionResponse updateSession(UUID sessionId, UpdateSessionRequest request) {
         SessionEntity session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new ResourceNotFoundException("Session with ID " + sessionId + " not found."));
 
-        // Update status to TERMINATED
-        session.setStatus(SessionStatus.TERMINATED);
+        if (session.getStatus() == SessionStatus.TERMINATED) {
+            throw new IllegalStateException("Cannot update a terminated session.");
+        }
+
+        if (request.getName() != null && !request.getName().isBlank()) {
+            session.setName(request.getName());
+        }
+
+        if (request.getStatus() != null) {
+            if (request.getStatus() == SessionStatus.TERMINATED) {
+                throw new IllegalStateException("Use the delete endpoint to terminate a session.");
+            }
+            session.setStatus(request.getStatus());
+        }
+
         session.setLastActiveAt(OffsetDateTime.now());
         session = sessionRepository.save(session);
+
+        return SessionResponse.fromEntity(session);
+    }
+
+    /**
+     * /DeleteSession - Fully deletes session from DB and cleans up local server storage.
+     */
+    @Transactional
+    public void deleteSession(UUID sessionId) {
+        SessionEntity session = sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new ResourceNotFoundException("Session with ID " + sessionId + " not found."));
 
         // Clean up server local storage
         fileStorageService.deleteSessionDirectory(sessionId);
 
-        return SessionResponse.fromEntity(session);
+        // Fully remove the session from the database
+        sessionRepository.delete(session);
     }
 
     /**

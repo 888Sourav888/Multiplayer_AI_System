@@ -3,6 +3,7 @@ package com.multiplayerai.service.controller;
 import com.multiplayerai.service.dto.CreateSessionRequest;
 import com.multiplayerai.service.dto.SessionResponse;
 import com.multiplayerai.service.dto.SnapshotResponse;
+import com.multiplayerai.service.dto.UpdateSessionRequest;
 import com.multiplayerai.service.service.SessionService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -45,13 +46,25 @@ public class SessionController {
     }
 
     /**
-     * 3. Delete Session (/DeleteSession)
-     * Deletes physical server storage directory and marks session as TERMINATED.
+     * 3. Update Session (/UpdateSession)
+     * Partially updates session fields (name, status). Only non-null fields are applied.
+     */
+    @PatchMapping("/{sessionId}")
+    public ResponseEntity<SessionResponse> updateSession(
+            @PathVariable UUID sessionId,
+            @Valid @RequestBody UpdateSessionRequest request) {
+        SessionResponse response = sessionService.updateSession(sessionId, request);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * 4. Delete Session (/DeleteSession)
+     * Fully deletes the session from DB and cleans up server storage.
      */
     @DeleteMapping("/{sessionId}")
-    public ResponseEntity<SessionResponse> deleteSession(@PathVariable UUID sessionId) {
-        SessionResponse response = sessionService.deleteSession(sessionId);
-        return ResponseEntity.ok(response);
+    public ResponseEntity<Void> deleteSession(@PathVariable UUID sessionId) {
+        sessionService.deleteSession(sessionId);
+        return ResponseEntity.noContent().build();
     }
 
     /**
