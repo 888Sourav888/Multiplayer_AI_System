@@ -71,4 +71,13 @@ public class SessionController {
         List<SnapshotResponse> response = sessionService.getSessionSnapshots(sessionId);
         return ResponseEntity.ok(response);
     }
+
+    /**
+     * Get all sessions owned by a specific user.
+     */
+    @GetMapping
+    public ResponseEntity<List<SessionResponse>> getSessionsByOwner(@RequestParam("ownerId") UUID ownerId) {
+        List<SessionResponse> response = sessionService.getSessionsByOwner(ownerId);
+        return ResponseEntity.ok(response);
+    }
 }

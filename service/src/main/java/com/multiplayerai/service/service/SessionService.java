@@ -154,4 +154,18 @@ public class SessionService {
                 .map(SnapshotResponse::fromEntity)
                 .collect(Collectors.toList());
     }
+
+    /**
+     * Lists all sessions owned by a specific user.
+     */
+    @Transactional(readOnly = true)
+    public List<SessionResponse> getSessionsByOwner(UUID ownerId) {
+        if (!userRepository.existsById(ownerId)) {
+            throw new ResourceNotFoundException("User not found with ID: " + ownerId);
+        }
+        return sessionRepository.findByOwnerId(ownerId)
+                .stream()
+                .map(SessionResponse::fromEntity)
+                .collect(Collectors.toList());
+    }
 }

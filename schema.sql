@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS session_members (
     PRIMARY KEY (session_id, user_id)
 );
 
--- 4. Snapshots Table
+-- 4. Snapshots Table ( need to decide , do we need this ? )
 CREATE TABLE IF NOT EXISTS snapshots (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -74,38 +74,3 @@ CREATE TABLE IF NOT EXISTS ai_messages (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- 7. AIToolCall Table
-CREATE TABLE IF NOT EXISTS ai_tool_calls (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    ai_context_id UUID NOT NULL REFERENCES ai_contexts(id) ON DELETE CASCADE,
-    message_id UUID REFERENCES ai_messages(id) ON DELETE SET NULL,
-    tool_name VARCHAR(100) NOT NULL,
-    arguments JSONB,
-    result JSONB,
-    status tool_call_status NOT NULL DEFAULT 'PENDING',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    completed_at TIMESTAMP WITH TIME ZONE
-);
-
--- 8. AIPatch Table
-CREATE TABLE IF NOT EXISTS ai_patches (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    ai_context_id UUID NOT NULL REFERENCES ai_contexts(id) ON DELETE CASCADE,
-    message_id UUID REFERENCES ai_messages(id) ON DELETE SET NULL,
-    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
-    status patch_status NOT NULL DEFAULT 'PENDING',
-    patch_content TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    resolved_at TIMESTAMP WITH TIME ZONE
-);
-
--- Indexes for efficient querying
-CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_id);
-CREATE INDEX IF NOT EXISTS idx_session_members_user ON session_members(user_id);
-CREATE INDEX IF NOT EXISTS idx_snapshots_session ON snapshots(session_id);
-CREATE INDEX IF NOT EXISTS idx_ai_contexts_session ON ai_contexts(session_id);
-CREATE INDEX IF NOT EXISTS idx_ai_messages_context_seq ON ai_messages(ai_context_id, sequence_number);
-CREATE INDEX IF NOT EXISTS idx_ai_tool_calls_context ON ai_tool_calls(ai_context_id);
-CREATE INDEX IF NOT EXISTS idx_ai_tool_calls_message ON ai_tool_calls(message_id);
-CREATE INDEX IF NOT EXISTS idx_ai_patches_context ON ai_patches(ai_context_id);
-CREATE INDEX IF NOT EXISTS idx_ai_patches_message ON ai_patches(message_id);

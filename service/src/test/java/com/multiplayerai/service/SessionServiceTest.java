@@ -20,6 +20,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -44,6 +45,11 @@ class SessionServiceTest {
     @org.mockito.InjectMocks
     private SessionService sessionService;
 
+    @BeforeEach
+    void setUp() {
+        org.springframework.test.util.ReflectionTestUtils.setField(sessionService, "maxSessionsPerOwner", 10);
+    }
+
     @Test
     void createSession_Success() {
         UUID ownerId = UUID.randomUUID();
@@ -56,7 +62,8 @@ class SessionServiceTest {
         sessionEntity.setOwnerId(ownerId);
         sessionEntity.setStatus(SessionStatus.ACTIVE);
 
-        when(userRepository.findById(ownerId)).thenReturn(Optional.empty());
+        com.multiplayerai.service.entity.UserEntity owner = new com.multiplayerai.service.entity.UserEntity(ownerId, "testuser", "test@example.com", "passwordhash");
+        when(userRepository.findById(ownerId)).thenReturn(Optional.of(owner));
         when(sessionRepository.countByOwnerIdAndStatus(ownerId, SessionStatus.ACTIVE)).thenReturn(0L);
         when(sessionRepository.save(any(SessionEntity.class))).thenReturn(sessionEntity);
         when(fileStorageService.createSessionDirectory(any())).thenReturn("./data/sessions/" + sessionId);
@@ -119,5 +126,35 @@ class SessionServiceTest {
         when(sessionRepository.findById(sessionId)).thenReturn(Optional.empty());
 
         assertThrows(ResourceNotFoundException.class, () -> sessionService.getSession(sessionId));
+    }
+
+    @Test
+    void getSessionsByOwner_Success() {
+        UUID ownerId = UUID.randomUUID();
+        UUID sessionId = UUID.randomUUID();
+
+        SessionEntity sessionEntity = new SessionEntity();
+        sessionEntity.setId(sessionId);
+        sessionEntity.setName("Test Session");
+        sessionEntity.setOwnerId(ownerId);
+        sessionEntity.setStatus(SessionStatus.ACTIVE);
+
+        when(userRepository.existsById(ownerId)).thenReturn(true);
+        when(sessionRepository.findByOwnerId(ownerId)).thenReturn(List.of(sessionEntity));
+
+        List<SessionResponse> responses = sessionService.getSessionsByOwner(ownerId);
+
+        assertNotNull(responses);
+        assertEquals(1, responses.size());
+        assertEquals(sessionId, responses.get(0).getId());
+        assertEquals(ownerId, responses.get(0).getOwnerId());
+    }
+
+    @Test
+    void getSessionsByOwner_UserNotFound_ThrowsException() {
+        UUID ownerId = UUID.randomUUID();
+        when(userRepository.existsById(ownerId)).thenReturn(false);
+
+        assertThrows(ResourceNotFoundException.class, () -> sessionService.getSessionsByOwner(ownerId));
     }
 }
