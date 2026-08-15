@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // Config holds the configuration values for the client application.
@@ -14,8 +15,13 @@ type Config struct {
 
 // InitializeApp loads the configuration from config.json and returns the Config dictionary/struct.
 func InitializeApp() (*Config, error) {
-	const configPath = "config.json"
-	
+	execPath, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine executable path: %w", err)
+	}
+	execDir := filepath.Dir(execPath)
+	configPath := filepath.Join(execDir, "config.json")
+
 	file, err := os.Open(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open config file %s: %w", configPath, err)

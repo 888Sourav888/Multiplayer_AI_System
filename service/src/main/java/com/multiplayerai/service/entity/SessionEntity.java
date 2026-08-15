@@ -39,6 +39,15 @@ public class SessionEntity {
     @Column(name = "status", nullable = false)
     private SessionStatus status = SessionStatus.ACTIVE;
 
+    @Column(name = "git_repo_url", length = 255)
+    private String gitRepoUrl;
+
+    @Column(name = "git_branch", length = 100)
+    private String gitBranch;
+
+    @Column(name = "git_commit_sha", length = 40)
+    private String gitCommitSha;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 

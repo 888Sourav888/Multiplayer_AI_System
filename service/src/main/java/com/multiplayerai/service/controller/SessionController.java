@@ -93,4 +93,16 @@ public class SessionController {
         List<SessionResponse> response = sessionService.getSessionsByOwner(ownerId);
         return ResponseEntity.ok(response);
     }
+
+    /**
+     * 5. Join Session
+     * Adds the specified user as a member of the session.
+     */
+    @PostMapping("/{sessionId}/join")
+    public ResponseEntity<SessionResponse> joinSession(
+            @PathVariable UUID sessionId,
+            @RequestParam("userId") UUID userId) {
+        SessionResponse response = sessionService.joinSession(sessionId, userId);
+        return ResponseEntity.ok(response);
+    }
 }

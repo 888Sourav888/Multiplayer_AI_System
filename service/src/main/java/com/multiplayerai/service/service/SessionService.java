@@ -66,6 +66,9 @@ public class SessionService {
         session.setProjectStoragePath("PENDING");
         session.setCurrentVersion(1L);
         session.setStatus(SessionStatus.ACTIVE);
+        session.setGitRepoUrl(request.getGitRepoUrl());
+        session.setGitBranch(request.getGitBranch());
+        session.setGitCommitSha(request.getGitCommitSha());
 
         // Initial persist to get generated UUID from JPA
         session = sessionRepository.save(session);
@@ -93,6 +96,13 @@ public class SessionService {
 
         if (session.getStatus() == SessionStatus.TERMINATED) {
             throw new IllegalStateException("Cannot persist snapshot for a terminated session.");
+        }
+
+        if (snapshotFile == null || snapshotFile.isEmpty()) {
+            throw new IllegalArgumentException("Snapshot file is empty.");
+        }
+        if (snapshotFile.getSize() > 5 * 1024 * 1024) { // 5MB limit
+            throw new IllegalArgumentException("Snapshot file size exceeds the 5MB limit.");
         }
 
         // Increment version
@@ -135,6 +145,16 @@ public class SessionService {
                 throw new IllegalStateException("Use the delete endpoint to terminate a session.");
             }
             session.setStatus(request.getStatus());
+        }
+
+        if (request.getGitRepoUrl() != null) {
+            session.setGitRepoUrl(request.getGitRepoUrl());
+        }
+        if (request.getGitBranch() != null) {
+            session.setGitBranch(request.getGitBranch());
+        }
+        if (request.getGitCommitSha() != null) {
+            session.setGitCommitSha(request.getGitCommitSha());
         }
 
         session.setLastActiveAt(OffsetDateTime.now());
@@ -194,5 +214,43 @@ public class SessionService {
                 .stream()
                 .map(SessionResponse::fromEntity)
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Joins a user to an existing session by adding them as a session member.
+     */
+    @Transactional
+    public SessionResponse joinSession(UUID sessionId, UUID userId) {
+        SessionEntity session = sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new ResourceNotFoundException("Session with ID " + sessionId + " not found."));
+
+        if (!userRepository.existsById(userId)) {
+            throw new ResourceNotFoundException("User not found with ID: " + userId);
+        }
+
+        if (session.getStatus() != SessionStatus.ACTIVE) {
+            throw new IllegalStateException("Cannot join a session that is not ACTIVE. Current status: " + session.getStatus());
+        }
+
+        SessionMemberId memberId = new SessionMemberId(sessionId, userId);
+        if (sessionMemberRepository.existsById(memberId)) {
+            // User is already a member (could be owner or member)
+            return SessionResponse.fromEntity(session);
+        }
+
+        // Limit member count to at most 5
+        long memberCount = sessionMemberRepository.countByIdSessionId(sessionId);
+        if (memberCount >= 5) {
+            throw new SessionLimitExceededException("Session " + sessionId + " has reached the maximum allowed members limit (5).");
+        }
+
+        SessionMemberEntity member = new SessionMemberEntity(memberId, MemberRole.MEMBER);
+        sessionMemberRepository.save(member);
+
+        // Update session activity time
+        session.setLastActiveAt(OffsetDateTime.now());
+        sessionRepository.save(session);
+
+        return SessionResponse.fromEntity(session);
     }
 }

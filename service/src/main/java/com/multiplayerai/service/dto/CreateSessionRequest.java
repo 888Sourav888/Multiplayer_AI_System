@@ -20,4 +20,8 @@ public class CreateSessionRequest {
 
     @NotNull(message = "Owner ID must not be null")
     private UUID ownerId;
+
+    private String gitRepoUrl;
+    private String gitBranch;
+    private String gitCommitSha;
 }

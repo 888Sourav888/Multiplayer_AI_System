@@ -22,6 +22,9 @@ public class SessionResponse {
     private String projectStoragePath;
     private Long currentVersion;
     private SessionStatus status;
+    private String gitRepoUrl;
+    private String gitBranch;
+    private String gitCommitSha;
     private OffsetDateTime createdAt;
     private OffsetDateTime lastActiveAt;
 
@@ -33,6 +36,9 @@ public class SessionResponse {
         response.setProjectStoragePath(entity.getProjectStoragePath());
         response.setCurrentVersion(entity.getCurrentVersion());
         response.setStatus(entity.getStatus());
+        response.setGitRepoUrl(entity.getGitRepoUrl());
+        response.setGitBranch(entity.getGitBranch());
+        response.setGitCommitSha(entity.getGitCommitSha());
         response.setCreatedAt(entity.getCreatedAt());
         response.setLastActiveAt(entity.getLastActiveAt());
         return response;

@@ -34,6 +34,9 @@ func (s *MenuService) FormatSessionList(sessions []Session) string {
 		builder.WriteString(fmt.Sprintf("   Session ID:  %s\n", session.ID))
 		builder.WriteString(fmt.Sprintf("   Status:      %s\n", session.Status))
 		builder.WriteString(fmt.Sprintf("   Version:     v%d\n", session.CurrentVersion))
+		if session.GitRepoUrl != "" {
+			builder.WriteString(fmt.Sprintf("   Git Repo:    %s [%s @ %s]\n", session.GitRepoUrl, session.GitBranch, session.GitCommitSha[:8]))
+		}
 		builder.WriteString(fmt.Sprintf("   Last Active: %s\n\n", session.LastActiveAt))
 	}
 	return strings.TrimSuffix(builder.String(), "\n")
@@ -46,6 +49,11 @@ func (s *MenuService) FormatSessionDetail(session *Session) string {
 	builder.WriteString(fmt.Sprintf("  Session ID:  %s\n", session.ID))
 	builder.WriteString(fmt.Sprintf("  Status:      %s\n", session.Status))
 	builder.WriteString(fmt.Sprintf("  Version:     v%d\n", session.CurrentVersion))
+	if session.GitRepoUrl != "" {
+		builder.WriteString(fmt.Sprintf("  Git Repo:    %s\n", session.GitRepoUrl))
+		builder.WriteString(fmt.Sprintf("  Git Branch:  %s\n", session.GitBranch))
+		builder.WriteString(fmt.Sprintf("  Git Commit:  %s\n", session.GitCommitSha))
+	}
 	builder.WriteString(fmt.Sprintf("  Last Active: %s", session.LastActiveAt))
 	return builder.String()
 }
@@ -71,11 +79,39 @@ func (s *MenuService) DeleteSession(sessionID string) error {
 	return s.apiClient.DeleteSessionByID(sessionID)
 }
 
-// CreateSession creates a new session with the given name, owned by the specified user.
-func (s *MenuService) CreateSession(userID string, sessionName string) (*Session, error) {
+// CreateSession creates a new session, optionally attaching Git metadata.
+func (s *MenuService) CreateSession(userID string, sessionName string, gitRepo string, gitBranch string, gitCommitSha string) (*Session, error) {
 	payload := CreateSessionPayload{
-		Name:    sessionName,
-		OwnerID: userID,
+		Name:         sessionName,
+		OwnerID:      userID,
+		GitRepoUrl:   gitRepo,
+		GitBranch:    gitBranch,
+		GitCommitSha: gitCommitSha,
 	}
 	return s.apiClient.CreateSession(payload)
+}
+
+// JoinSession joins the specified user to a session.
+func (s *MenuService) JoinSession(userID string, sessionID string) (*Session, error) {
+	return s.apiClient.JoinSession(sessionID, userID)
+}
+
+// UploadSnapshot compresses and uploads the local workspace code to the backend.
+func (s *MenuService) UploadSnapshot(sessionID string, zipBytes []byte) (*SnapshotResponse, error) {
+	return s.apiClient.UploadSnapshot(sessionID, zipBytes)
+}
+
+// UpdateSessionGitInfo updates a session's git synchronization metadata.
+func (s *MenuService) UpdateSessionGitInfo(sessionID string, gitRepo string, gitBranch string, gitCommitSha string) (*Session, error) {
+	payload := UpdateSessionPayload{
+		GitRepoUrl:   &gitRepo,
+		GitBranch:    &gitBranch,
+		GitCommitSha: &gitCommitSha,
+	}
+	return s.apiClient.UpdateSessionByID(sessionID, payload)
+}
+
+// GetBaseURL returns the configured backend URL.
+func (s *MenuService) GetBaseURL() string {
+	return s.apiClient.BaseURL
 }

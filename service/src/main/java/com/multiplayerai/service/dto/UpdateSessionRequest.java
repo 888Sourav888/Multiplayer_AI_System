@@ -15,4 +15,8 @@ public class UpdateSessionRequest {
     private String name;
 
     private SessionStatus status;
+
+    private String gitRepoUrl;
+    private String gitBranch;
+    private String gitCommitSha;
 }

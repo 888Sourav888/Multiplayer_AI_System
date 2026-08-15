@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 )
 
@@ -16,6 +17,9 @@ type Session struct {
 	ProjectStoragePath string `json:"projectStoragePath"`
 	CurrentVersion     int    `json:"currentVersion"`
 	Status             string `json:"status"`
+	GitRepoUrl         string `json:"gitRepoUrl"`
+	GitBranch          string `json:"gitBranch"`
+	GitCommitSha       string `json:"gitCommitSha"`
 	CreatedAt          string `json:"createdAt"`
 	LastActiveAt       string `json:"lastActiveAt"`
 }
@@ -23,8 +27,11 @@ type Session struct {
 // UpdateSessionPayload is the request body for PATCH /api/sessions/{sessionId}.
 // Pointer fields allow partial updates — nil fields are omitted from JSON.
 type UpdateSessionPayload struct {
-	Name   *string `json:"name,omitempty"`
-	Status *string `json:"status,omitempty"`
+	Name         *string `json:"name,omitempty"`
+	Status       *string `json:"status,omitempty"`
+	GitRepoUrl   *string `json:"gitRepoUrl,omitempty"`
+	GitBranch    *string `json:"gitBranch,omitempty"`
+	GitCommitSha *string `json:"gitCommitSha,omitempty"`
 }
 
 // APIClient handles communication with the backend services.
@@ -129,8 +136,11 @@ func (c *APIClient) DeleteSessionByID(sessionID string) error {
 
 // CreateSessionPayload is the request body for POST /api/sessions.
 type CreateSessionPayload struct {
-	Name    string `json:"name"`
-	OwnerID string `json:"ownerId"`
+	Name         string `json:"name"`
+	OwnerID      string `json:"ownerId"`
+	GitRepoUrl   string `json:"gitRepoUrl"`
+	GitBranch    string `json:"gitBranch"`
+	GitCommitSha string `json:"gitCommitSha"`
 }
 
 // CreateSession sends a POST request to create a new session.
@@ -164,3 +174,91 @@ func (c *APIClient) CreateSession(payload CreateSessionPayload) (*Session, error
 
 	return &created, nil
 }
+
+// JoinSession sends a POST request to join a user to a session.
+func (c *APIClient) JoinSession(sessionID string, userID string) (*Session, error) {
+	url := fmt.Sprintf("%s/api/sessions/%s/join?userId=%s", c.BaseURL, sessionID, userID)
+
+	resp, err := http.Post(url, "application/json", nil)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("backend returned non-OK status: %s (body: %s)", resp.Status, string(body))
+	}
+
+	var session Session
+	if err := json.Unmarshal(body, &session); err != nil {
+		return nil, fmt.Errorf("failed to parse join response: %w (raw: %s)", err, string(body))
+	}
+
+	return &session, nil
+}
+
+// SnapshotResponse represents the metadata of an uploaded snapshot.
+type SnapshotResponse struct {
+	ID              string `json:"id"`
+	SessionID       string `json:"sessionId"`
+	Version         int    `json:"version"`
+	StorageLocation string `json:"storageLocation"`
+	CreatedAt       string `json:"createdAt"`
+}
+
+// UploadSnapshot sends a multipart POST request with the zipped directory content.
+func (c *APIClient) UploadSnapshot(sessionID string, zipBytes []byte) (*SnapshotResponse, error) {
+	url := fmt.Sprintf("%s/api/sessions/%s/persist", c.BaseURL, sessionID)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	part, err := writer.CreateFormFile("file", "snapshot.zip")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create form file: %w", err)
+	}
+
+	_, err = part.Write(zipBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to write zip bytes: %w", err)
+	}
+
+	err = writer.Close()
+	if err != nil {
+		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, url, body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create POST request: %w", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("backend returned non-OK status: %s (body: %s)", resp.Status, string(respBody))
+	}
+
+	var snapshot SnapshotResponse
+	if err := json.Unmarshal(respBody, &snapshot); err != nil {
+		return nil, fmt.Errorf("failed to parse snapshot response: %w (raw: %s)", err, string(respBody))
+	}
+
+	return &snapshot, nil
+}
+

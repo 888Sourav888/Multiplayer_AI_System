@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"multiplayer_ai_client/session"
 )
 
 // ShowMenu displays the CLI menu for the client application and delegates
@@ -17,9 +19,10 @@ func ShowMenu(userID string, service *MenuService) {
 		fmt.Println("=== Menu ===")
 		fmt.Println("1. See my sessions")
 		fmt.Println("2. Create session")
-		fmt.Println("3. Update session")
-		fmt.Println("4. Delete session")
-		fmt.Println("5. Exit")
+		fmt.Println("3. Join session")
+		fmt.Println("4. Update session")
+		fmt.Println("5. Delete session")
+		fmt.Println("6. Exit")
 		fmt.Print("Select option: ")
 
 		input, err := reader.ReadString('\n')
@@ -35,10 +38,12 @@ func ShowMenu(userID string, service *MenuService) {
 		case "2":
 			handleCreateSession(reader, userID, service)
 		case "3":
-			handleUpdateSession(reader, userID, service)
+			handleJoinSession(reader, userID, service)
 		case "4":
-			handleDeleteSession(reader, userID, service)
+			handleUpdateSession(reader, userID, service)
 		case "5":
+			handleDeleteSession(reader, userID, service)
+		case "6":
 			fmt.Println("Goodbye!")
 			return
 		default:
@@ -75,15 +80,197 @@ func handleCreateSession(reader *bufio.Reader, userID string, service *MenuServi
 		return
 	}
 
-	created, err := service.CreateSession(userID, name)
+	gitInfo, isGit := GetGitInfo()
+	var created *Session
+
+	if isGit {
+		fmt.Printf("\nGit repository detected. Creating synchronized session using HEAD...\n")
+		fmt.Printf("  URL:    %s\n  Branch: %s\n  Commit: %s\n\n", gitInfo.RepoURL, gitInfo.Branch, gitInfo.CommitSHA)
+
+		created, err = service.CreateSession(userID, name, gitInfo.RepoURL, gitInfo.Branch, gitInfo.CommitSHA)
+		if err != nil {
+			fmt.Printf("✗ Creation failed: %v\n\n", err)
+			return
+		}
+		fmt.Println("✓ Git-synchronized session created successfully!")
+	} else {
+		fmt.Println("\nNo Git repository detected. Generating initial workspace snapshot...")
+		zipBytes, zErr := ZipDirectory(".")
+		if zErr != nil {
+			fmt.Printf("✗ Failed to compress workspace: %v\n\n", zErr)
+			return
+		}
+
+		zipSizeMB := float64(len(zipBytes)) / (1024 * 1024)
+		fmt.Printf("Local workspace archive size: %.2f MB\n", zipSizeMB)
+
+		if len(zipBytes) > 5*1024*1024 {
+			fmt.Printf("✗ Creation failed: Archive size (%.2f MB) exceeds the 5MB limit.\n\n", zipSizeMB)
+			return
+		}
+
+		created, err = service.CreateSession(userID, name, "", "", "")
+		if err != nil {
+			fmt.Printf("✗ Creation failed: %v\n\n", err)
+			return
+		}
+
+		fmt.Println("Uploading initial workspace snapshot...")
+		_, upErr := service.UploadSnapshot(created.ID, zipBytes)
+		if upErr != nil {
+			fmt.Printf("✗ Warning: Session created but snapshot upload failed: %v\n\n", upErr)
+			return
+		}
+		fmt.Println("✓ Session created and initial snapshot uploaded successfully!")
+	}
+
+	fmt.Println(service.FormatSessionDetail(created))
+	fmt.Println()
+}
+
+// handleJoinSession runs the interactive join session flow.
+func handleJoinSession(reader *bufio.Reader, userID string, service *MenuService) {
+	fmt.Println("\n--- Join Session ---")
+	fmt.Println("  1. Join an active session you own")
+	fmt.Println("  2. Join any other session by Session ID")
+	fmt.Println("  3. Back to menu")
+	fmt.Print("Select: ")
+
+	input, err := reader.ReadString('\n')
 	if err != nil {
-		fmt.Printf("✗ Creation failed: %v\n\n", err)
+		fmt.Printf("Error reading input: %v\n\n", err)
 		return
 	}
 
-	fmt.Println("✓ Session created successfully!")
-	fmt.Println(service.FormatSessionDetail(created))
-	fmt.Println()
+	choice := strings.TrimSpace(input)
+	switch choice {
+	case "1":
+		// List owned sessions
+		sessions, err := service.GetUserSessions(userID)
+		if err != nil {
+			fmt.Printf("✗ Failed to load sessions: %v\n\n", err)
+			return
+		}
+
+		// Filter out terminated sessions
+		var activeSessions []Session
+		for _, s := range sessions {
+			if s.Status == "ACTIVE" {
+				activeSessions = append(activeSessions, s)
+			}
+		}
+
+		if len(activeSessions) == 0 {
+			fmt.Println("No active sessions found to join.\n")
+			return
+		}
+
+		for i, s := range activeSessions {
+			fmt.Printf("  %d. %s  (%s)\n", i+1, s.Name, s.ID)
+		}
+		fmt.Println()
+
+		sessionIndex := promptForNumber(reader, "Select session to join (number): ", 1, len(activeSessions))
+		if sessionIndex == -1 {
+			return
+		}
+		selected := activeSessions[sessionIndex-1]
+
+		joined, err := service.JoinSession(userID, selected.ID)
+		if err != nil {
+			fmt.Printf("✗ Join failed: %v\n\n", err)
+			return
+		}
+
+		fmt.Println("✓ Successfully joined session!")
+		if !syncOwnerSessionState(joined, userID, service) {
+			return
+		}
+		fmt.Println(service.FormatSessionDetail(joined))
+		fmt.Println()
+
+		// Start the live session interaction module (REST + WS)
+		session.RunSessionFlow(userID, selected.ID, service.GetBaseURL())
+
+	case "2":
+		fmt.Print("Enter Session ID (UUID): ")
+		inputID, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Printf("Error reading input: %v\n\n", err)
+			return
+		}
+		sessionID := strings.TrimSpace(inputID)
+		if sessionID == "" {
+			fmt.Println("Cancelled.\n")
+			return
+		}
+
+		joined, err := service.JoinSession(userID, sessionID)
+		if err != nil {
+			fmt.Printf("✗ Join failed: %v\n\n", err)
+			return
+		}
+
+		fmt.Println("✓ Successfully joined session!")
+		if !syncOwnerSessionState(joined, userID, service) {
+			return
+		}
+		fmt.Println(service.FormatSessionDetail(joined))
+		fmt.Println()
+
+		// Start the live session interaction module (REST + WS)
+		session.RunSessionFlow(userID, sessionID, service.GetBaseURL())
+
+	case "3":
+		fmt.Println()
+		return
+	default:
+		fmt.Println("Invalid selection.\n")
+	}
+}
+
+// syncOwnerSessionState checks if the current user is the owner, and if so,
+// synchronizes their local workspace (Git info or Zip snapshot) to the backend.
+func syncOwnerSessionState(joined *Session, userID string, service *MenuService) bool {
+	if joined.OwnerID != userID {
+		return true // Other users do not need to upload state
+	}
+
+	fmt.Println("Welcome, Session Owner! Synchronizing latest workspace state to backend...")
+	gitInfo, isGit := GetGitInfo()
+
+	if isGit {
+		fmt.Printf("Updating Git reference (HEAD @ %s)...\n", gitInfo.CommitSHA[:8])
+		updated, err := service.UpdateSessionGitInfo(joined.ID, gitInfo.RepoURL, gitInfo.Branch, gitInfo.CommitSHA)
+		if err != nil {
+			fmt.Printf("✗ Warning: Git synchronization failed: %v\n", err)
+		} else {
+			*joined = *updated
+			fmt.Println("✓ Git metadata successfully updated on backend!")
+		}
+	} else {
+		fmt.Println("Compressing local workspace code...")
+		zipBytes, err := ZipDirectory(".")
+		if err != nil {
+			fmt.Printf("✗ Failed to compress workspace: %v\n\n", err)
+			return false
+		}
+
+		zipSizeMB := float64(len(zipBytes)) / (1024 * 1024)
+		if len(zipBytes) > 5*1024*1024 {
+			fmt.Printf("✗ Cannot join session: Workspace snapshot size (%.2f MB) exceeds 5MB limit.\n\n", zipSizeMB)
+			return false
+		}
+
+		fmt.Printf("Uploading latest workspace snapshot (%.2f MB)...\n", zipSizeMB)
+		_, upErr := service.UploadSnapshot(joined.ID, zipBytes)
+		if upErr != nil {
+			fmt.Printf("✗ Warning: Snapshot synchronization failed: %v\n", upErr)
+		} else {
+			fmt.Println("✓ Workspace snapshot synchronized successfully!")
+		}
+	}
+	return true
 }
 
 // handleDeleteSession runs the interactive delete sub-flow.
@@ -130,14 +317,13 @@ func handleDeleteSession(reader *bufio.Reader, userID string, service *MenuServi
 	}
 
 	// Step 4: Delete
-	deleted, err := service.DeleteSession(selected.ID)
+	err = service.DeleteSession(selected.ID)
 	if err != nil {
 		fmt.Printf("✗ Delete failed: %v\n\n", err)
 		return
 	}
 
 	fmt.Println("✓ Session deleted successfully!")
-	fmt.Println(service.FormatSessionDetail(deleted))
 	fmt.Println()
 }
 
