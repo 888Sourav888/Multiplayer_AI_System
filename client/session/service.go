@@ -3,8 +3,9 @@ package session
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
+
+	"multiplayer_ai_client/ui"
 )
 
 // SessionService manages the business logic for the active session room.
@@ -29,17 +30,21 @@ func (ss *SessionService) ConnectSession(sessionID string, userID string) (<-cha
 	return ss.backend.ConnectAndSubscribe(sessionID, userID)
 }
 
-// FormatSessionInfo returns a formatted metadata string for the active session.
+// FormatSessionInfo returns a styled metadata card for the active session.
 func (ss *SessionService) FormatSessionInfo(s *Session) string {
-	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("  Session Name: %s\n", s.Name))
-	builder.WriteString(fmt.Sprintf("  Session ID:   %s\n", s.ID))
-	builder.WriteString(fmt.Sprintf("  Owner ID:     %s\n", s.OwnerID))
-	builder.WriteString(fmt.Sprintf("  Version:      v%d\n", s.CurrentVersion))
-	builder.WriteString(fmt.Sprintf("  Status:       %s\n", s.Status))
-	builder.WriteString(fmt.Sprintf("  Storage Path: %s\n", s.ProjectStoragePath))
-	builder.WriteString(fmt.Sprintf("  Last Active:  %s", s.LastActiveAt))
-	return builder.String()
+	ver := fmt.Sprintf("%d", s.CurrentVersion)
+	return ui.SessionDetailCard(
+		s.Name,
+		s.ID,
+		s.Status,
+		ver,
+		s.OwnerID,
+		s.ProjectStoragePath,
+		s.LastActiveAt,
+		"", // Git fields not available in session.Session
+		"",
+		"",
+	)
 }
 
 // SendSimulatedPatch formats and sends a patch message via WebSocket.

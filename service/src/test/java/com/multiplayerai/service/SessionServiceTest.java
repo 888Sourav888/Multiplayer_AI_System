@@ -110,13 +110,11 @@ class SessionServiceTest {
         sessionEntity.setStatus(SessionStatus.ACTIVE);
 
         when(sessionRepository.findById(sessionId)).thenReturn(Optional.of(sessionEntity));
-        when(sessionRepository.save(any(SessionEntity.class))).thenReturn(sessionEntity);
         when(fileStorageService.deleteSessionDirectory(sessionId)).thenReturn(true);
 
-        SessionResponse response = sessionService.deleteSession(sessionId);
+        sessionService.deleteSession(sessionId);
 
-        assertNotNull(response);
-        assertEquals(SessionStatus.TERMINATED, response.getStatus());
+        verify(sessionRepository, times(1)).delete(sessionEntity);
         verify(fileStorageService, times(1)).deleteSessionDirectory(sessionId);
     }
 

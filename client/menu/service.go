@@ -3,6 +3,8 @@ package menu
 import (
 	"fmt"
 	"strings"
+
+	"multiplayer_ai_client/ui"
 )
 
 // MenuService coordinates business logic between the UI and backend calls.
@@ -22,40 +24,49 @@ func (s *MenuService) GetUserSessions(userID string) ([]Session, error) {
 	return s.apiClient.FetchSessionsRequest(userID)
 }
 
-// FormatSessionList formats a slice of sessions into a readable numbered list.
+// FormatSessionList formats a slice of sessions as rich bordered cards.
 func (s *MenuService) FormatSessionList(sessions []Session) string {
 	if len(sessions) == 0 {
-		return "No sessions found."
+		return ui.BrightBlack + "  No sessions found." + ui.Reset + "\n"
 	}
 
-	var builder strings.Builder
-	for i, session := range sessions {
-		builder.WriteString(fmt.Sprintf("%d. Name:        %s\n", i+1, session.Name))
-		builder.WriteString(fmt.Sprintf("   Session ID:  %s\n", session.ID))
-		builder.WriteString(fmt.Sprintf("   Status:      %s\n", session.Status))
-		builder.WriteString(fmt.Sprintf("   Version:     v%d\n", session.CurrentVersion))
-		if session.GitRepoUrl != "" {
-			builder.WriteString(fmt.Sprintf("   Git Repo:    %s [%s @ %s]\n", session.GitRepoUrl, session.GitBranch, session.GitCommitSha[:8]))
+	var b strings.Builder
+	for i, sess := range sessions {
+		ver := fmt.Sprintf("%d", sess.CurrentVersion)
+		gitCommit := sess.GitCommitSha
+		if len(gitCommit) > 8 {
+			gitCommit = gitCommit[:8]
 		}
-		builder.WriteString(fmt.Sprintf("   Last Active: %s\n\n", session.LastActiveAt))
+		b.WriteString(ui.SessionCard(
+			i+1,
+			sess.Name,
+			sess.ID,
+			sess.Status,
+			ver,
+			sess.LastActiveAt,
+			sess.GitRepoUrl,
+			sess.GitBranch,
+			gitCommit,
+		))
 	}
-	return strings.TrimSuffix(builder.String(), "\n")
+	return b.String()
 }
 
-// FormatSessionDetail formats a single session into a readable summary.
-func (s *MenuService) FormatSessionDetail(session *Session) string {
-	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("  Name:        %s\n", session.Name))
-	builder.WriteString(fmt.Sprintf("  Session ID:  %s\n", session.ID))
-	builder.WriteString(fmt.Sprintf("  Status:      %s\n", session.Status))
-	builder.WriteString(fmt.Sprintf("  Version:     v%d\n", session.CurrentVersion))
-	if session.GitRepoUrl != "" {
-		builder.WriteString(fmt.Sprintf("  Git Repo:    %s\n", session.GitRepoUrl))
-		builder.WriteString(fmt.Sprintf("  Git Branch:  %s\n", session.GitBranch))
-		builder.WriteString(fmt.Sprintf("  Git Commit:  %s\n", session.GitCommitSha))
-	}
-	builder.WriteString(fmt.Sprintf("  Last Active: %s", session.LastActiveAt))
-	return builder.String()
+// FormatSessionDetail formats a single session as a rich bordered detail card.
+func (s *MenuService) FormatSessionDetail(sess *Session) string {
+	ver := fmt.Sprintf("%d", sess.CurrentVersion)
+	return ui.SessionDetailCard(
+		sess.Name,
+		sess.ID,
+		sess.Status,
+		ver,
+		"", // ownerID not shown in menu detail (shown in session room)
+		"",
+		sess.LastActiveAt,
+		sess.GitRepoUrl,
+		sess.GitBranch,
+		sess.GitCommitSha,
+	)
 }
 
 // RenameSession updates the name of a session by ID.

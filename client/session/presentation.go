@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"multiplayer_ai_client/ui"
 )
 
 func createWorkspaceRules(sessionName string) {
@@ -32,7 +34,7 @@ func removeWorkspaceRules() {
 	_ = os.Remove(".cursorrules")
 	_ = os.Remove(".clinerules")
 	_ = os.Remove(".cursor/rules/multiplayer.mdc")
-	fmt.Println("\n✓ Local workspace AI rules cleaned up.")
+	ui.Success("Local workspace AI rules cleaned up.")
 }
 
 // RunSessionFlow starts the live interactive multiplayer session CLI.
@@ -55,33 +57,37 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 	service := NewSessionService(backend)
 	defer service.Close()
 
-	fmt.Printf("\nConnecting to live multiplayer session %s...\n", sessionID)
-	
+	ui.ConnectingMsg(sessionID)
+
 	// Fetch initial session info
+	connSpin := ui.NewSpinner("Fetching session metadata…")
 	sInfo, err := service.GetSessionInfo(sessionID)
 	if err != nil {
-		fmt.Printf("✗ Failed to get session info: %v\n\n", err)
+		connSpin.StopError(fmt.Sprintf("Failed to get session info: %v", err))
 		return
 	}
+	connSpin.Stop()
 
 	// Initialize active session context if engine is provided
 	if engine != nil {
 		localPath, _ := filepath.Abs(".")
 		err = engine.SetActiveSession(sInfo, userID, localPath)
 		if err != nil {
-			fmt.Printf("✗ Warning: Failed to set active session in SQLite: %v\n", err)
+			ui.Warnf("Failed to set active session in SQLite: %v", err)
 		}
 	}
 
 	// Connect to WS
+	wsSpin := ui.NewSpinner("Establishing WebSocket connection…")
 	msgChan, err := service.ConnectSession(sessionID, userID)
 	if err != nil {
-		fmt.Printf("✗ Connection failed: %v\n\n", err)
+		wsSpin.StopError(fmt.Sprintf("Connection failed: %v", err))
 		return
 	}
+	wsSpin.StopSuccess("Successfully connected to live session room!")
 
-	fmt.Println("✓ Successfully connected to live session room!")
-	fmt.Printf("Active Session Name: %s\n\n", sInfo.Name)
+	ui.Infof("Active Session: %s%s%s", ui.Bold+ui.BrightWhite, sInfo.Name, ui.Reset)
+	fmt.Println()
 
 	// Send CONTEXT_REQUEST to get session history from peers
 	reqMsg := WSMessage{
@@ -95,7 +101,7 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 
 	// Generate .cursorrules and .clinerules files
 	createWorkspaceRules(sInfo.Name)
-	fmt.Println("✓ Local workspace AI rules generated (.cursorrules, .clinerules, .cursor/rules/multiplayer.mdc)")
+	ui.Success("Local workspace AI rules generated (.cursorrules, .clinerules, .cursor/rules/multiplayer.mdc)")
 
 	var watcher *HighPrecisionWatcher
 
@@ -108,7 +114,8 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 				return
 			case msg, ok := <-msgChan:
 				if !ok {
-					fmt.Println("\n[Live Session Alert] Connection closed by remote server.")
+					fmt.Println()
+					ui.Warn("[Live Session Alert] Connection closed by remote server.")
 					return
 				}
 				// Format incoming broadcast alerts nicely
@@ -136,7 +143,10 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 							for _, m := range msgs {
 								_ = engine.SaveAIMessage(m.ID, m.SessionID, m.SenderID, m.Modifier, m.Content, m.StepIndex, m.CreatedAt)
 							}
-							fmt.Printf("\n[Incoming Sync] Synchronized %d AI messages from session owner.\nSelect: ", len(msgs))
+							fmt.Printf("\n%s  ↓ Sync%s  Synchronized %d AI messages from session owner.\n%s  ›%s Select: ",
+								ui.BrightCyan+ui.Bold, ui.Reset,
+								len(msgs),
+								ui.BrightCyan, ui.Reset)
 						}
 					}
 				} else if msg.Type == "PATCH_BROADCAST" || msg.Status == "PATCH_BROADCAST" {
@@ -150,13 +160,21 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 									msgID := fmt.Sprintf("broadcast-%s-%d", msg.SenderID, time.Now().UnixNano())
 									_ = engine.SaveAIMessage(msgID, sessionID, msg.SenderID, patch.Modifier, patch.ContentDelta, -1, time.Now())
 								}
-								fmt.Printf("\n--- AI Broadcast Message from %s (via %s) ---\n%s\n---------------------------------------------\n",
-									msg.SenderID, patch.Modifier, patch.ContentDelta)
+								fmt.Printf("\n%s╭─ AI Broadcast%s  from %s%s%s  via %s%s%s\n%s│%s %s\n%s╰%s\n",
+									ui.BrightMagenta+ui.Bold, ui.Reset,
+									ui.BrightWhite+ui.Bold, msg.SenderID, ui.Reset,
+									ui.Dim, patch.Modifier, ui.Reset,
+									ui.BrightBlack, ui.Reset,
+									patch.ContentDelta,
+									ui.BrightBlack, ui.Reset,
+								)
 							}
 						}
 
 						if !isAiMsg {
-							fmt.Printf("\n[Incoming Sync] Applying remote patch from sender: %s\n", msg.SenderID)
+							fmt.Printf("\n%s  ↓ Patch%s  Applying remote patch from %s%s%s\n",
+								ui.BrightCyan+ui.Bold, ui.Reset,
+								ui.BrightWhite, msg.SenderID, ui.Reset)
 							for _, patch := range msg.Patches {
 								absPath, _ := filepath.Abs(patch.FilePathFromRoot)
 								if watcher != nil {
@@ -164,21 +182,24 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 								}
 								err := ApplyPatch(".", patch.FilePathFromRoot, patch.Operation, patch.IsWholeFile, patch.ContentDelta)
 								if err != nil {
-									fmt.Printf("   ✗ Failed to apply patch for %s: %v\n", patch.FilePathFromRoot, err)
+									ui.Errorf("  Failed to apply patch for %s: %v", patch.FilePathFromRoot, err)
 								} else {
-									fmt.Printf("   ✓ Successfully applied patch for %s\n", patch.FilePathFromRoot)
+									ui.Successf("  Applied patch for %s", patch.FilePathFromRoot)
 									if engine != nil {
 										changeID := fmt.Sprintf("fc-in-%s-%d", msg.SenderID, time.Now().UnixNano())
 										_ = engine.SaveFileChange(changeID, sessionID, msg.SenderID, patch.FilePathFromRoot, patch.Operation, patch.Modifier, patch.IsAiEdit, patch.ContentDelta, time.Now())
 									}
 								}
 							}
+							fmt.Printf("%s  ›%s Select: ", ui.BrightCyan, ui.Reset)
 						}
-						fmt.Print("Select: ")
 					}
 				} else if msg.Status != "" {
-					fmt.Printf("\n[Session Event] Status update: %s - %s\n\n", msg.Status, msg.Message)
-					fmt.Print("Select: ")
+					fmt.Printf("\n%s  ⚡ Event%s  Status update: %s%s%s — %s\n%s  ›%s Select: ",
+						ui.BrightYellow+ui.Bold, ui.Reset,
+						ui.BrightWhite, msg.Status, ui.Reset,
+						msg.Message,
+						ui.BrightCyan, ui.Reset)
 				}
 			}
 		}
@@ -236,7 +257,7 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 				// Watcher exited
 			}
 		}()
-		fmt.Println("✓ Real-time directory file synchronization watcher active!")
+		ui.Success("Real-time directory file synchronization watcher active!")
 	}
 
 	// Start AI Transcript Poller
@@ -269,17 +290,20 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 		pollerCancel = engine.StartPoller(context.Background(), sessionID, userID, ".", broadcastFn)
 	}
 
+	fmt.Println()
+
 	// Loop for session menu actions
 	for {
-		fmt.Printf("=== Active Session: %s ===\n", sInfo.Name)
-		fmt.Println("1. Show session details")
-		fmt.Println("2. Send simulated file patch")
-		fmt.Println("3. Leave session")
-		fmt.Print("Select: ")
+		ui.ActiveSessionHeader(sInfo.Name)
+		ui.SubMenuItem(1, "Show session details")
+		ui.SubMenuItem(2, "Send simulated file patch")
+		ui.SubMenuItem(3, "Leave session")
+		fmt.Println()
+		ui.Prompt("Select")
 
 		input, err := reader.ReadString('\n')
 		if err != nil {
-			fmt.Printf("Error reading input: %v\n", err)
+			ui.Errorf("Error reading input: %v", err)
 			break
 		}
 
@@ -287,43 +311,48 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 		switch choice {
 		case "1":
 			// Refresh info and print
+			refreshSpin := ui.NewSpinner("Refreshing session info…")
 			sInfo, err = service.GetSessionInfo(sessionID)
 			if err != nil {
-				fmt.Printf("Error refreshing session: %v\n\n", err)
+				refreshSpin.StopError(fmt.Sprintf("Error refreshing session: %v", err))
 			} else {
-				fmt.Println("\n--- Live Session Details ---")
-				fmt.Println(service.FormatSessionInfo(sInfo))
+				refreshSpin.Stop()
+				fmt.Println()
+				fmt.Print(service.FormatSessionInfo(sInfo))
 				fmt.Println()
 			}
 		case "2":
-			fmt.Print("\nEnter file path (e.g. main.go): ")
+			fmt.Println()
+			ui.Prompt("File path (e.g. main.go)")
 			pathInput, _ := reader.ReadString('\n')
 			filePath := strings.TrimSpace(pathInput)
 
-			fmt.Print("Enter patch content (e.g. + func main()): ")
+			ui.Prompt("Patch content (e.g. + func main())")
 			contentInput, _ := reader.ReadString('\n')
 			content := strings.TrimSpace(contentInput)
 
 			if filePath == "" || content == "" {
-				fmt.Println("Cancelled. Empty inputs not allowed.\n")
+				ui.Warn("Cancelled. Empty inputs not allowed.")
 				continue
 			}
 
+			patchSpin := ui.NewSpinner(fmt.Sprintf("Sending patch for %s…", filePath))
 			err := service.SendSimulatedPatch(sessionID, userID, filePath, content)
 			if err != nil {
-				fmt.Printf("✗ Failed to send patch: %v\n\n", err)
+				patchSpin.StopError(fmt.Sprintf("Failed to send patch: %v", err))
 			} else {
-				fmt.Println("✓ Patch sent successfully!\n")
+				patchSpin.StopSuccess("Patch sent successfully!")
 			}
+			fmt.Println()
 		case "3":
-			fmt.Println("Leaving session...")
+			ui.Info("Leaving session…")
 			close(stopPrintChan)
 			if pollerCancel != nil {
 				pollerCancel()
 			}
 			return
 		default:
-			fmt.Println("Invalid option.\n")
+			ui.Warn("Invalid option.")
 		}
 	}
 }

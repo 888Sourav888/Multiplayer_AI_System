@@ -24,4 +24,12 @@ public class CreateSessionRequest {
     private String gitRepoUrl;
     private String gitBranch;
     private String gitCommitSha;
+
+    public CreateSessionRequest(String name, UUID ownerId) {
+        this.name = name;
+        this.ownerId = ownerId;
+        this.gitRepoUrl = null;
+        this.gitBranch = null;
+        this.gitCommitSha = null;
+    }
 }

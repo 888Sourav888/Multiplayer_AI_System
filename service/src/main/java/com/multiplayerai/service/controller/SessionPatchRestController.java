@@ -24,7 +24,7 @@ public class SessionPatchRestController {
      */
     @PostMapping("/{sessionId}/patches")
     public ResponseEntity<PatchBroadcastResponse> submitPatch(
-            @PathVariable UUID sessionId,
+            @PathVariable("sessionId") UUID sessionId,
             @Valid @RequestBody PatchTransferRequest request) {
 
         request.setSessionId(sessionId);
