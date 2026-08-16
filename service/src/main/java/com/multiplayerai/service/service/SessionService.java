@@ -237,6 +237,16 @@ public class SessionService {
             throw new IllegalStateException("Cannot join a session that is not ACTIVE. Current status: " + session.getStatus());
         }
 
+        // If the user joining is NOT the owner, verify the owner is currently connected to the session
+        UUID ownerId = session.getOwnerId();
+        if (!userId.equals(ownerId)) {
+            SessionMemberId ownerMemberId = new SessionMemberId(sessionId, ownerId);
+            SessionMemberEntity ownerMember = sessionMemberRepository.findById(ownerMemberId).orElse(null);
+            if (ownerMember == null || !Boolean.TRUE.equals(ownerMember.getIsConnected())) {
+                throw new IllegalStateException("Cannot join session. The session owner is not currently connected to this session.");
+            }
+        }
+
         SessionMemberId memberId = new SessionMemberId(sessionId, userId);
         if (sessionMemberRepository.existsById(memberId)) {
             // User is already a member (could be owner or member)

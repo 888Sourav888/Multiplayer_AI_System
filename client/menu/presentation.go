@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"multiplayer_ai_client/contextengine"
 	"multiplayer_ai_client/session"
 )
 
@@ -193,8 +194,19 @@ func handleJoinSession(reader *bufio.Reader, userID string, service *MenuService
 		fmt.Println(service.FormatSessionDetail(joined))
 		fmt.Println()
 
+		// Dynamically open SQLite DB folder named: session + workingDirectoryBasedHash
+		db, err := contextengine.InitSessionDB(selected.ID, ".")
+		if err != nil {
+			fmt.Printf("✗ Failed to initialize session SQLite DB: %v\n\n", err)
+			return
+		}
+		engine := contextengine.NewSqliteContextEngine(db)
+		engine.InitLogger(selected.ID, ".")
+		defer engine.Close()
+		defer db.Close()
+
 		// Start the live session interaction module (REST + WS)
-		session.RunSessionFlow(userID, selected.ID, service.GetBaseURL())
+		session.RunSessionFlow(userID, selected.ID, service.GetBaseURL(), engine)
 
 	case "2":
 		fmt.Print("Enter Session ID (UUID): ")
@@ -225,8 +237,19 @@ func handleJoinSession(reader *bufio.Reader, userID string, service *MenuService
 		fmt.Println(service.FormatSessionDetail(joined))
 		fmt.Println()
 
+		// Dynamically open SQLite DB folder named: session + workingDirectoryBasedHash
+		db, err := contextengine.InitSessionDB(sessionID, ".")
+		if err != nil {
+			fmt.Printf("✗ Failed to initialize session SQLite DB: %v\n\n", err)
+			return
+		}
+		engine := contextengine.NewSqliteContextEngine(db)
+		engine.InitLogger(sessionID, ".")
+		defer engine.Close()
+		defer db.Close()
+
 		// Start the live session interaction module (REST + WS)
-		session.RunSessionFlow(userID, sessionID, service.GetBaseURL())
+		session.RunSessionFlow(userID, sessionID, service.GetBaseURL(), engine)
 
 	case "3":
 		fmt.Println()

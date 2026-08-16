@@ -30,6 +30,9 @@ public class SessionMemberEntity {
     @Column(name = "last_seen_at")
     private OffsetDateTime lastSeenAt;
 
+    @Column(name = "is_connected", nullable = false)
+    private Boolean isConnected = false;
+
     public SessionMemberEntity(SessionMemberId id, MemberRole role) {
         this.id = id;
         this.role = role;
@@ -42,6 +45,9 @@ public class SessionMemberEntity {
         }
         if (role == null) {
             role = MemberRole.MEMBER;
+        }
+        if (isConnected == null) {
+            isConnected = false;
         }
     }
 }

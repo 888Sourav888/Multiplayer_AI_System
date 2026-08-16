@@ -1,11 +1,13 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -91,7 +93,7 @@ func (sb *SessionBackend) GetSessionByID(sessionID string) (*Session, error) {
 }
 
 // ConnectAndSubscribe establishes the WebSocket connection and sends the SUBSCRIBE message.
-func (sb *SessionBackend) ConnectAndSubscribe(sessionID string) (<-chan WSMessage, error) {
+func (sb *SessionBackend) ConnectAndSubscribe(sessionID string, userID string) (<-chan WSMessage, error) {
 	// Derive websocket URL from HTTP base URL
 	wsURL := sb.BaseHTTPURL
 	wsURL = strings.Replace(wsURL, "https://", "wss://", 1)
@@ -126,6 +128,7 @@ func (sb *SessionBackend) ConnectAndSubscribe(sessionID string) (<-chan WSMessag
 	subMsg := WSMessage{
 		Type:      "SUBSCRIBE",
 		SessionID: sessionID,
+		SenderID:  userID,
 	}
 	subBytes, err := json.Marshal(subMsg)
 	if err != nil {
@@ -216,4 +219,40 @@ func (sb *SessionBackend) Close() {
 		sb.wsConn.Close()
 		sb.wsConn = nil
 	}
+}
+
+// AIMessage represents the SQLite stored model for an AI message.
+type AIMessage struct {
+	ID        string    `json:"id"`
+	SessionID string    `json:"sessionId"`
+	SenderID  string    `json:"senderId"`
+	Modifier  string    `json:"modifier"`
+	Content   string    `json:"content"`
+	StepIndex int       `json:"stepIndex"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// FileChange represents the SQLite stored model for a file change.
+type FileChange struct {
+	ID            string    `json:"id"`
+	SessionID     string    `json:"sessionId"`
+	SenderID      string    `json:"senderId"`
+	FilePath      string    `json:"filePath"`
+	Operation     string    `json:"operation"`
+	Modifier      string    `json:"modifier"`
+	IsAiEdit      bool      `json:"isAiEdit"`
+	ChangeContent string    `json:"changeContent"`
+	CreatedAt     time.Time `json:"createdAt"`
+}
+
+// ContextEngine abstractly represents the local database and poller context logic.
+type ContextEngine interface {
+	SetActiveSession(s *Session, userID string, localPath string) error
+	SaveAIMessage(id, sessionID, senderID, modifier, content string, stepIndex int, createdAt time.Time) error
+	GetSessionMessages(sessionID string, limit int) ([]AIMessage, error)
+	StartPoller(ctx context.Context, sessionID, userID, projectPath string, broadcastFn func(modifier string, content string, stepIndex int)) context.CancelFunc
+	SaveFileChange(id, sessionID, senderID, filePath, operation, modifier string, isAiEdit bool, changeContent string, createdAt time.Time) error
+	GetFileChanges(sessionID string, limit int) ([]FileChange, error)
+	LogInfo(format string, v ...interface{})
+	LogError(format string, v ...interface{})
 }

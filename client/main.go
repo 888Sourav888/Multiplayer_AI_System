@@ -5,10 +5,22 @@ import (
 	"fmt"
 	"os"
 
+	"multiplayer_ai_client/contextengine"
 	"multiplayer_ai_client/menu"
 )
 
 func main() {
+	// Intercept MCP server execution before parsing normal flags
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		contextengine.RunMCPServer()
+		return
+	}
+
+	// Auto-register MCP server configuration in Antigravity
+	if err := contextengine.RegisterMCPServer(); err != nil {
+		fmt.Printf("[Warning] Failed to auto-register MCP server: %v\n", err)
+	}
+
 	userIDFlag := flag.String("user", "", "User ID to run the client for")
 	flag.Parse()
 

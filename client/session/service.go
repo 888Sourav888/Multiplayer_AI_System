@@ -25,8 +25,8 @@ func (ss *SessionService) GetSessionInfo(sessionID string) (*Session, error) {
 }
 
 // ConnectSession initiates the WebSocket channel.
-func (ss *SessionService) ConnectSession(sessionID string) (<-chan WSMessage, error) {
-	return ss.backend.ConnectAndSubscribe(sessionID)
+func (ss *SessionService) ConnectSession(sessionID string, userID string) (<-chan WSMessage, error) {
+	return ss.backend.ConnectAndSubscribe(sessionID, userID)
 }
 
 // FormatSessionInfo returns a formatted metadata string for the active session.
