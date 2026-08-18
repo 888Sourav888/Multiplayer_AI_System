@@ -59,11 +59,24 @@ func RegisterMCPServer() error {
 	// Use forward slashes for Antigravity compatibility on Windows
 	execPathClean := filepath.ToSlash(execPathAbs)
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	cwdAbs, err := filepath.Abs(cwd)
+	if err == nil {
+		cwd = cwdAbs
+	}
+	cwdClean := filepath.ToSlash(cwd)
+
+	envMap := make(map[string]string)
+	envMap["MPAI_WORKSPACE_DIR"] = cwdClean
+
 	// Add or update the multiplayer-ai server config
 	mcpConfig.MCPServers["multiplayer-ai"] = MCPServerConfig{
 		Command: execPathClean,
-		Args:    []string{"mcp"},
-		Env:     make(map[string]string),
+		Args:    []string{"mcp", cwdClean},
+		Env:     envMap,
 	}
 
 	// Write back the updated JSON configuration

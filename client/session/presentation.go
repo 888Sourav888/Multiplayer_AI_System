@@ -3,8 +3,10 @@ package session
 import (
 	"bufio"
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,14 +17,36 @@ import (
 	"multiplayer_ai_client/ui"
 )
 
-func createWorkspaceRules(sessionName string) {
+func getWDHash(wd string) string {
+	h := md5.New()
+	abs, err := filepath.Abs(wd)
+	if err != nil {
+		abs = wd
+	}
+	_, _ = io.WriteString(h, strings.ToLower(filepath.ToSlash(abs)))
+	return fmt.Sprintf("%x", h.Sum(nil))[:16]
+}
+
+func createWorkspaceRules(sessionID, sessionName, wd string) {
+	home, err := os.UserHomeDir()
+	var dbPath string
+	var hash string
+	if err == nil {
+		hash = getWDHash(wd)
+		dbDir := filepath.Join(home, ".mpai", "shared context", fmt.Sprintf("%s_%s", sessionID, hash))
+		dbPath = filepath.ToSlash(filepath.Join(dbDir, "multiplayer_ai.db"))
+	}
+
 	cursorRulesContent := fmt.Sprintf(`# Multiplayer AI Rules
 # This project is part of a live multiplayer session: %s.
+# Session ID: %s
+# Folder Hash: %s
+# DB Path: %s
 
 # You MUST consult the multiplayer-ai MCP server before starting tasks or proposing files changes.
 # Call the "get_session_messages" tool to synchronize your context with other participants.
 # Never skip checking the shared context.
-`, sessionName)
+`, sessionName, sessionID, hash, dbPath)
 
 	_ = os.WriteFile(".cursorrules", []byte(cursorRulesContent), 0644)
 	_ = os.WriteFile(".clinerules", []byte(cursorRulesContent), 0644)
@@ -100,7 +124,7 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 	_ = service.SendWSMessage(reqMsg)
 
 	// Generate .cursorrules and .clinerules files
-	createWorkspaceRules(sInfo.Name)
+	createWorkspaceRules(sessionID, sInfo.Name, ".")
 	ui.Success("Local workspace AI rules generated (.cursorrules, .clinerules, .cursor/rules/multiplayer.mdc)")
 
 	var watcher *HighPrecisionWatcher

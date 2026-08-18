@@ -10,9 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
-
-	"multiplayer_ai_client/session"
 )
 
 // JSONRPCRequest represents an incoming JSON-RPC request.
@@ -44,9 +41,101 @@ type ToolCallParams struct {
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 }
 
-type clientConfig struct {
-	LowerEnvBackendURL string `json:"lowerEnvBackendURL"`
-	ProdBackendURL     string `json:"prodBackendURL"`
+
+
+func readDBPathFromRules(cwd string) (string, string, error) {
+	paths := []string{
+		filepath.Join(cwd, ".cursor/rules/multiplayer.mdc"),
+		filepath.Join(cwd, ".cursorrules"),
+		filepath.Join(cwd, ".clinerules"),
+	}
+
+	for _, p := range paths {
+		file, err := os.Open(p)
+		if err != nil {
+			continue
+		}
+		defer file.Close()
+
+		var dbPath string
+		var sessionID string
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "# DB Path:") {
+				dbPath = strings.TrimSpace(strings.TrimPrefix(line, "# DB Path:"))
+			} else if strings.HasPrefix(line, "# Session ID:") {
+				sessionID = strings.TrimSpace(strings.TrimPrefix(line, "# Session ID:"))
+			}
+		}
+		if dbPath != "" {
+			return dbPath, sessionID, nil
+		}
+	}
+	return "", "", fmt.Errorf("metadata not found in rule files")
+}
+
+var mcpWorkspaceDir string
+
+func getSessionDB() (*sql.DB, string, error) {
+	cwd := mcpWorkspaceDir
+	if cwd == "" {
+		cwd = "."
+	}
+	if abs, err := filepath.Abs(cwd); err == nil {
+		cwd = abs
+	}
+
+	// 1. Try reading the DB path and Session ID from workspace rules first
+	ruleDBPath, ruleSessionID, err := readDBPathFromRules(cwd)
+	if err == nil && ruleDBPath != "" {
+		db, err := sql.Open("sqlite", ruleDBPath)
+		if err == nil {
+			// Optimize SQLite for concurrent access
+			_, err = db.Exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+			if err == nil {
+				return db, ruleSessionID, nil
+			}
+			db.Close()
+		}
+	}
+
+	// 2. Fallback to directory scanning
+	return FindAndOpenSessionDBForWD(cwd)
+}
+
+func initMCPLogger(cwd string) {
+	var dbDir string
+	dbPath, _, err := readDBPathFromRules(cwd)
+	if err == nil && dbPath != "" {
+		dbDir = filepath.Dir(dbPath)
+	} else {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			hash := GetWDHash(cwd)
+			suffix := "_" + hash
+			sharedContextDir := filepath.Join(home, ".mpai", "shared context")
+			entries, err := os.ReadDir(sharedContextDir)
+			if err == nil {
+				for _, entry := range entries {
+					if entry.IsDir() && strings.HasSuffix(entry.Name(), suffix) {
+						dbDir = filepath.Join(sharedContextDir, entry.Name())
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if dbDir != "" {
+		_ = os.MkdirAll(dbDir, 0755)
+		logPath := filepath.Join(dbDir, "mcp.log")
+		file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			log.SetOutput(io.MultiWriter(os.Stderr, file))
+			log.Printf("[MCP] Logging initialized at: %s\n", logPath)
+		}
+	}
 }
 
 // RunMCPServer runs the main Model Context Protocol JSON-RPC stdin/stdout loop
@@ -55,23 +144,33 @@ func RunMCPServer() {
 	log.SetOutput(os.Stderr)
 	log.Println("[MCP] Starting Model Context Protocol Server...")
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		cwd = "."
+	// 1. Resolve workspace directory:
+	// Priority 1: os.Args[2] (passed by IDE as ["mcp", "<path>"])
+	// Priority 2: MPAI_WORKSPACE_DIR environment variable
+	// Priority 3: os.Getwd()
+	cwd := ""
+	if len(os.Args) > 2 {
+		cwd = os.Args[2]
 	}
-
-	db, sessionID, err := FindAndOpenSessionDBForWD(cwd)
-	if err != nil {
-		log.Printf("[MCP] Fatal error: failed to initialize SQLite DB for workspace '%s': %v\n", cwd, err)
-		os.Exit(1)
+	if cwd == "" {
+		cwd = os.Getenv("MPAI_WORKSPACE_DIR")
 	}
-	defer db.Close()
+	if cwd == "" {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			cwd = "."
+		}
+	}
+	if abs, err := filepath.Abs(cwd); err == nil {
+		cwd = abs
+	}
+	mcpWorkspaceDir = cwd
 
-	engine := NewSqliteContextEngine(db)
-	engine.InitLogger(sessionID, cwd)
-	defer engine.Close()
+	// 2. Initialize MCP logger in session dir if exists
+	initMCPLogger(cwd)
 
-	log.Printf("[MCP] Resolved session ID '%s' for workspace '%s'\n", sessionID, cwd)
+	log.Printf("[MCP] Server initialized in workspace context '%s'\n", cwd)
 
 	reader := bufio.NewReader(os.Stdin)
 
@@ -96,11 +195,12 @@ func RunMCPServer() {
 			continue
 		}
 
-		handleMCPRequest(db, &req)
+		handleMCPRequest(&req)
 	}
 }
 
-func handleMCPRequest(db *sql.DB, req *JSONRPCRequest) {
+func handleMCPRequest(req *JSONRPCRequest) {
+	log.Printf("[MCP Request] Method: %s, ID: %v\n", req.Method, req.ID)
 	switch req.Method {
 	case "initialize":
 		result := map[string]interface{}{
@@ -121,14 +221,6 @@ func handleMCPRequest(db *sql.DB, req *JSONRPCRequest) {
 	case "tools/list":
 		tools := []map[string]interface{}{
 			{
-				"name":        "get_active_session",
-				"description": "Get the currently active multiplayer session details matching the workspace directory (ID, Name, status, project storage path, and active user ID). Use this to check the current session context.",
-				"inputSchema": map[string]interface{}{
-					"type":       "object",
-					"properties": map[string]interface{}{},
-				},
-			},
-			{
 				"name":        "get_session_messages",
 				"description": "Get chronological logs of AI coding messages and user updates inside the active session. You MUST call this at startup to align your state with other participants and their AIs.",
 				"inputSchema": map[string]interface{}{
@@ -140,34 +232,6 @@ func handleMCPRequest(db *sql.DB, req *JSONRPCRequest) {
 							"minimum":     1,
 						},
 					},
-				},
-			},
-			{
-				"name":        "get_file_changes_history",
-				"description": "Get chronological history of recent file changes (additions, modifications, deletions) made by all developers and AI agents in the active session. This helps you track who made what file changes.",
-				"inputSchema": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"limit": map[string]interface{}{
-							"type":        "integer",
-							"description": "Maximum number of file changes to fetch (default 50)",
-							"minimum":     1,
-						},
-					},
-				},
-			},
-			{
-				"name":        "broadcast_ai_message",
-				"description": "Broadcast an AI message or status update to all other developers and AI agents in the active multiplayer session.",
-				"inputSchema": map[string]interface{}{
-					"type": "object",
-					"properties": map[string]interface{}{
-						"message": map[string]interface{}{
-							"type":        "string",
-							"description": "The text content or status report to broadcast.",
-						},
-					},
-					"required": []string{"message"},
 				},
 			},
 		}
@@ -183,31 +247,25 @@ func handleMCPRequest(db *sql.DB, req *JSONRPCRequest) {
 			return
 		}
 
-		handleToolCall(db, req.ID, params.Name, params.Arguments)
+		handleToolCall(req.ID, params.Name, params.Arguments)
 
 	default:
 		sendErrorResponse(req.ID, -32601, fmt.Sprintf("Method not found: %s", req.Method), nil)
 	}
 }
 
-func handleToolCall(db *sql.DB, id interface{}, toolName string, argsJSON []byte) {
+func handleToolCall(id interface{}, toolName string, argsJSON []byte) {
+	log.Printf("[MCP Tool Call] Tool: %s, Args: %s\n", toolName, string(argsJSON))
+	db, sessionID, err := getSessionDB()
+	if err != nil {
+		log.Printf("[MCP Tool Call Error] Failed to get session DB: %v\n", err)
+		sendToolCallResultError(id, fmt.Sprintf("No active session found matching workspace directory. Please join a session using the multiplayer CLI client first. (Workspace: %s, Hash: %s, Error: %v)", mcpWorkspaceDir, GetWDHash(mcpWorkspaceDir), err))
+		return
+	}
+	defer db.Close()
+	_ = sessionID
+
 	switch toolName {
-	case "get_active_session":
-		s, activeUser, err := GetActiveSession(db)
-		if err != nil {
-			sendToolCallResultError(id, fmt.Sprintf("Failed to query active session: %v", err))
-			return
-		}
-		if s == nil {
-			sendToolCallResultText(id, "No active session found matching this project directory. Please join a session via the multiplayer CLI client first.")
-			return
-		}
-
-		cwd, _ := os.Getwd()
-		resStr := fmt.Sprintf("Active Session Details:\n- ID: %s\n- Name: %s\n- Owner ID: %s\n- Backend Storage Path: %s\n- Local Project Path: %s\n- Status: %s\n- Active User: %s",
-			s.ID, s.Name, s.OwnerID, s.ProjectStoragePath, cwd, s.Status, activeUser)
-		sendToolCallResultText(id, resStr)
-
 	case "get_session_messages":
 		// Parse limit
 		var limitArg struct {
@@ -249,162 +307,9 @@ func handleToolCall(db *sql.DB, id interface{}, toolName string, argsJSON []byte
 
 		sendToolCallResultText(id, sb.String())
 
-	case "get_file_changes_history":
-		// Parse limit
-		var limitArg struct {
-			Limit int `json:"limit"`
-		}
-		limitArg.Limit = 50 // default
-		if len(argsJSON) > 0 {
-			_ = json.Unmarshal(argsJSON, &limitArg)
-		}
-
-		s, _, err := GetActiveSession(db)
-		if err != nil || s == nil {
-			sendToolCallResultText(id, "No active session found matching this project directory. Please join a session first.")
-			return
-		}
-
-		changes, err := GetFileChanges(db, s.ID, limitArg.Limit)
-		if err != nil {
-			sendToolCallResultError(id, fmt.Sprintf("Failed to query file changes: %v", err))
-			return
-		}
-
-		if len(changes) == 0 {
-			sendToolCallResultText(id, fmt.Sprintf("No file changes recorded yet in session %s.", s.Name))
-			return
-		}
-
-		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("=== File change history logs for session: %s ===\n", s.Name))
-		for _, c := range changes {
-			actor := "User"
-			if c.IsAiEdit {
-				actor = "AI"
-			}
-			sb.WriteString(fmt.Sprintf("\n[%s] %s (%s) performed %s on '%s' via '%s'\n",
-				c.CreatedAt.Local().Format("2006-01-02 15:04:05"),
-				actor,
-				c.SenderID,
-				c.Operation,
-				c.FilePath,
-				c.Modifier,
-			))
-			if len(c.ChangeContent) > 0 {
-				contentTrunc := c.ChangeContent
-				if len(contentTrunc) > 300 {
-					contentTrunc = contentTrunc[:300] + "... [truncated]"
-				}
-				sb.WriteString(fmt.Sprintf("Changes:\n%s\n", contentTrunc))
-			}
-			sb.WriteString("--------------------------------------------------\n")
-		}
-
-		sendToolCallResultText(id, sb.String())
-
-	case "broadcast_ai_message":
-		var broadcastArg struct {
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(argsJSON, &broadcastArg); err != nil || broadcastArg.Message == "" {
-			sendToolCallResultError(id, "Invalid arguments: missing 'message'")
-			return
-		}
-
-		s, activeUser, err := GetActiveSession(db)
-		if err != nil || s == nil {
-			sendToolCallResultText(id, "No active session found matching this project directory. Please join a session first.")
-			return
-		}
-
-		// Load backend URL from config
-		backendURL, err := loadBackendURL()
-		if err != nil {
-			sendToolCallResultError(id, fmt.Sprintf("Failed to resolve backend URL: %v", err))
-			return
-		}
-
-		// Connect and send over WS
-		err = SendMCPServerMessage(backendURL, s.ID, activeUser, broadcastArg.Message)
-		if err != nil {
-			sendToolCallResultError(id, fmt.Sprintf("Failed to broadcast message: %v", err))
-			return
-		}
-
-		// Save the message locally as well so it's in the local DB
-		msgID := fmt.Sprintf("mcp-%d", time.Now().UnixNano())
-		_ = SaveAIMessage(db, msgID, s.ID, activeUser, "AI (via MCP Server)", broadcastArg.Message, -1, time.Now())
-
-		sendToolCallResultText(id, fmt.Sprintf("Successfully broadcasted AI message to all other participants in session %s!", s.Name))
-
 	default:
 		sendToolCallResultError(id, fmt.Sprintf("Unknown tool: %s", toolName))
 	}
-}
-
-func loadBackendURL() (string, error) {
-	execPath, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	execDir := filepath.Dir(execPath)
-	configPath := filepath.Join(execDir, "config.json")
-
-	file, err := os.Open(configPath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	var cfg clientConfig
-	if err := json.NewDecoder(file).Decode(&cfg); err != nil {
-		return "", err
-	}
-
-	url := cfg.ProdBackendURL
-	if url == "" {
-		url = cfg.LowerEnvBackendURL
-	}
-	if url == "" {
-		return "", fmt.Errorf("no backend URL configured in config.json")
-	}
-	return url, nil
-}
-
-func SendMCPServerMessage(backendURL, sessionID, userID, message string) error {
-	backend := session.NewSessionBackend(backendURL)
-	defer backend.Close()
-
-	msgChan, err := backend.ConnectAndSubscribe(sessionID, userID)
-	if err != nil {
-		return err
-	}
-	_ = msgChan // not used
-
-	patchItem := session.FilePatchItem{
-		FilePathFromRoot: "ai_transcript.jsonl",
-		FileName:         "transcript.jsonl",
-		FileExtension:    ".jsonl",
-		Operation:        "AI_MESSAGE",
-		SizeBytes:        int64(len(message)),
-		Modifier:         "AI (via MCP Server)",
-		IsAiEdit:         false,
-		IsWholeFile:      true,
-		ContentDelta:     message,
-		FileChanges:      message,
-	}
-
-	msg := session.WSMessage{
-		Type:      "PATCH_TRANSFER",
-		SessionID: sessionID,
-		SenderID:  userID,
-		Message:   "AI broadcast from MCP",
-		Patches:   []session.FilePatchItem{patchItem},
-		Timestamp: time.Now().UnixNano() / int64(time.Millisecond),
-	}
-
-	return backend.SendMessage(msg)
 }
 
 func sendResponse(id interface{}, result interface{}) {
@@ -414,6 +319,7 @@ func sendResponse(id interface{}, result interface{}) {
 		Result:  result,
 	}
 	bytes, _ := json.Marshal(resp)
+	log.Printf("[MCP Response] ID: %v, Length: %d\n", id, len(bytes))
 	fmt.Println(string(bytes))
 }
 
@@ -428,6 +334,7 @@ func sendErrorResponse(id interface{}, code int, message string, data interface{
 		},
 	}
 	bytes, _ := json.Marshal(resp)
+	log.Printf("[MCP Error Response] ID: %v, Code: %d, Message: %s\n", id, code, message)
 	fmt.Println(string(bytes))
 }
 
