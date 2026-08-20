@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 
-	"multiplayer_ai_client/contextengine"
 	"multiplayer_ai_client/menu"
 	"multiplayer_ai_client/ui"
 )
@@ -14,22 +13,8 @@ func main() {
 	// Enable ANSI/VT100 on Windows
 	ui.InitTerminal()
 
-	// Intercept MCP server execution before parsing normal flags
-	if len(os.Args) > 1 && os.Args[1] == "mcp" {
-		contextengine.RunMCPServer()
-		return
-	}
-
 	// Print branded header
 	ui.Header("v1.0.0")
-
-	// Auto-register MCP server configuration in Antigravity
-	spin := ui.NewSpinner("Registering MCP server…")
-	if err := contextengine.RegisterMCPServer(); err != nil {
-		spin.StopError(fmt.Sprintf("Failed to auto-register MCP server: %v", err))
-	} else {
-		spin.Stop()
-	}
 
 	userIDFlag := flag.String("user", "", "User ID to run the client for")
 	flag.Parse()

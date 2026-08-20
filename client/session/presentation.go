@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,69 @@ func getWDHash(wd string) string {
 	return fmt.Sprintf("%x", h.Sum(nil))[:16]
 }
 
+func createWorkspaceHooks(sessionID, wd string) {
+	_ = os.MkdirAll(".agents", 0755)
+
+	// Determine the path to HooksModule relative to the running client executable
+	hooksSrcDir := ""
+	execPath, err := os.Executable()
+	if err == nil {
+		execDir := filepath.Dir(execPath)
+		candidate := filepath.Join(execDir, "..", "HooksModule")
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			hooksSrcDir = candidate
+		}
+	}
+
+	// Fallback to checking relative to the current working directory
+	if hooksSrcDir == "" {
+		if info, err := os.Stat("HooksModule"); err == nil && info.IsDir() {
+			hooksSrcDir = "HooksModule"
+		} else if info, err := os.Stat("../HooksModule"); err == nil && info.IsDir() {
+			hooksSrcDir = "../HooksModule"
+		}
+	}
+
+	if hooksSrcDir == "" {
+		ui.Warn("HooksModule source directory not found. Skipping hook setup.")
+		return
+	}
+
+	absHooksSrcDir, _ := filepath.Abs(hooksSrcDir)
+	hookExeName := "fetch_latest_hook.exe"
+	hookExePath := filepath.Join(absHooksSrcDir, hookExeName)
+
+	if _, err := os.Stat(hookExePath); os.IsNotExist(err) {
+		ui.Info("Building hooks executable...")
+		buildCmd := exec.Command("go", "build", "-o", hookExePath, ".")
+		buildCmd.Dir = absHooksSrcDir
+		if out, err := buildCmd.CombinedOutput(); err != nil {
+			ui.Warnf("Failed to build hooks executable: %v\nOutput: %s", err, string(out))
+			return
+		}
+		ui.Success("Hooks executable built successfully!")
+	}
+
+	exePathClean := filepath.ToSlash(hookExePath)
+	hash := getWDHash(wd)
+
+	hooksJSONContent := fmt.Sprintf(`{
+  "fetch-latest-messages": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "\"%s\" \"%s\" \"%s\""
+      }
+    ]
+  }
+}
+`, exePathClean, sessionID, hash)
+
+	hooksJSONPath := filepath.Join(".agents", "hooks.json")
+	_ = os.WriteFile(hooksJSONPath, []byte(hooksJSONContent), 0644)
+	ui.Success("Local workspace AI lifecycle hooks initialized (.agents/hooks.json)")
+}
+
 func createWorkspaceRules(sessionID, sessionName, wd string) {
 	home, err := os.UserHomeDir()
 	var dbPath string
@@ -42,23 +106,21 @@ func createWorkspaceRules(sessionID, sessionName, wd string) {
 # Session ID: %s
 # Folder Hash: %s
 # DB Path: %s
-
-# You MUST consult the multiplayer-ai MCP server before starting tasks or proposing files changes.
-# Call the "get_session_messages" tool to synchronize your context with other participants.
-# Never skip checking the shared context.
 `, sessionName, sessionID, hash, dbPath)
 
 	_ = os.WriteFile(".cursorrules", []byte(cursorRulesContent), 0644)
 	_ = os.WriteFile(".clinerules", []byte(cursorRulesContent), 0644)
 	_ = os.MkdirAll(".cursor/rules", 0755)
 	_ = os.WriteFile(".cursor/rules/multiplayer.mdc", []byte(cursorRulesContent), 0644)
+	createWorkspaceHooks(sessionID, wd)
 }
 
 func removeWorkspaceRules() {
 	_ = os.Remove(".cursorrules")
 	_ = os.Remove(".clinerules")
 	_ = os.Remove(".cursor/rules/multiplayer.mdc")
-	ui.Success("Local workspace AI rules cleaned up.")
+	_ = os.Remove(".agents/hooks.json")
+	ui.Success("Local workspace AI rules and hooks cleaned up.")
 }
 
 // RunSessionFlow starts the live interactive multiplayer session CLI.
