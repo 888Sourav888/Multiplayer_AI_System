@@ -1,5 +1,6 @@
 package contextengine
 
+/*
 import (
 	"bufio"
 	"context"
@@ -216,3 +217,5 @@ func (p *AITranscriptPoller) processNewEntries(path string, startOffset *int64, 
 
 	*startOffset = info.Size()
 }
+*/
+

@@ -79,8 +79,66 @@ func (e *SqliteContextEngine) GetSessionMessages(sessionID string, limit int) ([
 
 func (e *SqliteContextEngine) StartPoller(ctx context.Context, sessionID, userID, projectPath string, broadcastFn func(modifier string, content string, stepIndex int)) context.CancelFunc {
 	pollerCtx, cancel := context.WithCancel(ctx)
-	poller := NewAITranscriptPoller(sessionID, userID, projectPath, e.db, broadcastFn, e)
-	go poller.Start(pollerCtx)
+	
+	// Start polling messages created after the current time
+	lastSeenTime := time.Now().UTC().Format(time.RFC3339)
+	ticker := time.NewTicker(1000 * time.Millisecond)
+
+	e.LogInfo("Starting local SQLite poller for AI messages...")
+
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pollerCtx.Done():
+				e.LogInfo("Stopped local SQLite poller.")
+				return
+			case <-ticker.C:
+				// Query local_ai_messages table for new messages
+				query := `SELECT id, sender_id, modifier, content, step_index, created_at 
+					FROM local_ai_messages 
+					WHERE session_id = ? AND created_at > ? 
+					ORDER BY created_at ASC`
+				rows, err := e.db.Query(query, sessionID, lastSeenTime)
+				if err != nil {
+					e.LogError("Failed to query local_ai_messages: %v", err)
+					continue
+				}
+				
+				var lastTime time.Time
+				for rows.Next() {
+					var id, senderID, modifier, content, createdAtStr string
+					var stepIdx int
+					if err := rows.Scan(&id, &senderID, &modifier, &content, &stepIdx, &createdAtStr); err == nil {
+						// Parse message time
+						t, err := time.Parse(time.RFC3339, createdAtStr)
+						if err != nil {
+							t = time.Now().UTC()
+						}
+						
+						e.LogInfo("SQLite Poller: Found new AI message for step %d, saving and broadcasting", stepIdx)
+
+						// Save locally in the shared context DB's ai_messages table
+						_ = e.SaveAIMessage(id, sessionID, senderID, modifier, content, stepIdx, t)
+						
+						// Trigger the WebSocket broadcast
+						broadcastFn(modifier, content, stepIdx)
+						
+						if t.After(lastTime) {
+							lastTime = t
+						}
+					}
+				}
+				rows.Close()
+				
+				if !lastTime.IsZero() {
+					// Add a tiny buffer (1 millisecond) to avoid matching the same message again
+					lastSeenTime = lastTime.Add(1 * time.Millisecond).Format(time.RFC3339)
+				}
+			}
+		}
+	}()
+
 	return cancel
 }
 

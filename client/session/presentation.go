@@ -57,7 +57,7 @@ func createWorkspaceHooks(sessionID, wd string) {
 	}
 
 	absHooksSrcDir, _ := filepath.Abs(hooksSrcDir)
-	hookExeName := "fetch_latest_hook.exe"
+	hookExeName := "multiplayer_ai_hook.exe"
 	hookExePath := filepath.Join(absHooksSrcDir, hookExeName)
 
 	if _, err := os.Stat(hookExePath); os.IsNotExist(err) {
@@ -71,7 +71,22 @@ func createWorkspaceHooks(sessionID, wd string) {
 		ui.Success("Hooks executable built successfully!")
 	}
 
-	exePathClean := filepath.ToSlash(hookExePath)
+	// Copy the hooks binary to .agents/multiplayer_ai_hook.exe in the project directory
+	localHookExePath := filepath.Join(".agents", hookExeName)
+	srcFile, err := os.Open(hookExePath)
+	if err == nil {
+		defer srcFile.Close()
+		destFile, err := os.OpenFile(localHookExePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+		if err == nil {
+			defer destFile.Close()
+			_, _ = io.Copy(destFile, srcFile)
+		} else {
+			ui.Warnf("Failed to create local hooks binary: %v", err)
+		}
+	} else {
+		ui.Warnf("Failed to open source hooks binary for copying: %v", err)
+	}
+
 	hash := getWDHash(wd)
 
 	hooksJSONContent := fmt.Sprintf(`{
@@ -79,12 +94,20 @@ func createWorkspaceHooks(sessionID, wd string) {
     "PreInvocation": [
       {
         "type": "command",
-        "command": "\"%s\" \"%s\" \"%s\""
+        "command": "multiplayer_ai_hook.exe pre %s %s"
+      }
+    ]
+  },
+  "post-invocation-handler": {
+    "PostInvocation": [
+      {
+        "type": "command",
+        "command": "multiplayer_ai_hook.exe post %s %s"
       }
     ]
   }
 }
-`, exePathClean, sessionID, hash)
+`, sessionID, hash, sessionID, hash)
 
 	hooksJSONPath := filepath.Join(".agents", "hooks.json")
 	_ = os.WriteFile(hooksJSONPath, []byte(hooksJSONContent), 0644)
@@ -106,12 +129,35 @@ func createWorkspaceRules(sessionID, sessionName, wd string) {
 # Session ID: %s
 # Folder Hash: %s
 # DB Path: %s
+
+## SYSTEM GUIDELINES:
+- Ignore the ".mpai" directory (located in the user home directory) entirely.
+- Do NOT read from, write to, or check the database/files in the ".mpai" directory.
+- Do NOT write, execute, or suggest scripts (like Python or shell scripts) to interact with the ".mpai" folder or the SQLite databases inside it.
+- Strictly ignore and do NOT read or parse the rules files (".cursorrules", ".clinerules", ".cursor/rules/multiplayer.mdc"), ".antigravityignore", ".agents/hooks.json", or anything in the "HooksModule" directory.
 `, sessionName, sessionID, hash, dbPath)
 
 	_ = os.WriteFile(".cursorrules", []byte(cursorRulesContent), 0644)
 	_ = os.WriteFile(".clinerules", []byte(cursorRulesContent), 0644)
 	_ = os.MkdirAll(".cursor/rules", 0755)
 	_ = os.WriteFile(".cursor/rules/multiplayer.mdc", []byte(cursorRulesContent), 0644)
+
+	antigravityIgnoreContent := `# Ignored by Google Antigravity
+.mpai/
+**/.mpai/**
+*.db
+*.log
+.cursorrules
+.clinerules
+.cursor/rules/multiplayer.mdc
+.agents/
+.agents/hooks.json
+.antigravityignore
+HooksModule/
+**/HooksModule/**
+`
+	_ = os.WriteFile(".antigravityignore", []byte(antigravityIgnoreContent), 0644)
+
 	createWorkspaceHooks(sessionID, wd)
 }
 
@@ -119,6 +165,9 @@ func removeWorkspaceRules() {
 	_ = os.Remove(".cursorrules")
 	_ = os.Remove(".clinerules")
 	_ = os.Remove(".cursor/rules/multiplayer.mdc")
+	_ = os.Remove(".antigravityignore")
+	_ = os.Remove(".agents/multiplayer_ai_hook.exe")
+	_ = os.Remove(".agents/fetch_latest_hook.exe")
 	_ = os.Remove(".agents/hooks.json")
 	ui.Success("Local workspace AI rules and hooks cleaned up.")
 }
