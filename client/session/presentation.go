@@ -3,36 +3,173 @@ package session
 import (
 	"bufio"
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
+
+	"multiplayer_ai_client/ui"
 )
 
-func createWorkspaceRules(sessionName string) {
+func getWDHash(wd string) string {
+	h := md5.New()
+	abs, err := filepath.Abs(wd)
+	if err != nil {
+		abs = wd
+	}
+	_, _ = io.WriteString(h, strings.ToLower(filepath.ToSlash(abs)))
+	return fmt.Sprintf("%x", h.Sum(nil))[:16]
+}
+
+func createWorkspaceHooks(sessionID, wd string) {
+	_ = os.MkdirAll(".agents", 0755)
+
+	// Determine the path to HooksModule relative to the running client executable
+	hooksSrcDir := ""
+	execPath, err := os.Executable()
+	if err == nil {
+		execDir := filepath.Dir(execPath)
+		candidate := filepath.Join(execDir, "..", "HooksModule")
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			hooksSrcDir = candidate
+		}
+	}
+
+	// Fallback to checking relative to the current working directory
+	if hooksSrcDir == "" {
+		if info, err := os.Stat("HooksModule"); err == nil && info.IsDir() {
+			hooksSrcDir = "HooksModule"
+		} else if info, err := os.Stat("../HooksModule"); err == nil && info.IsDir() {
+			hooksSrcDir = "../HooksModule"
+		}
+	}
+
+	if hooksSrcDir == "" {
+		ui.Warn("HooksModule source directory not found. Skipping hook setup.")
+		return
+	}
+
+	absHooksSrcDir, _ := filepath.Abs(hooksSrcDir)
+	hookExeName := "multiplayer_ai_hook.exe"
+	hookExePath := filepath.Join(absHooksSrcDir, hookExeName)
+
+	if _, err := os.Stat(hookExePath); os.IsNotExist(err) {
+		ui.Info("Building hooks executable...")
+		buildCmd := exec.Command("go", "build", "-o", hookExePath, ".")
+		buildCmd.Dir = absHooksSrcDir
+		if out, err := buildCmd.CombinedOutput(); err != nil {
+			ui.Warnf("Failed to build hooks executable: %v\nOutput: %s", err, string(out))
+			return
+		}
+		ui.Success("Hooks executable built successfully!")
+	}
+
+	// Copy the hooks binary to .agents/multiplayer_ai_hook.exe in the project directory
+	localHookExePath := filepath.Join(".agents", hookExeName)
+	srcFile, err := os.Open(hookExePath)
+	if err == nil {
+		defer srcFile.Close()
+		destFile, err := os.OpenFile(localHookExePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+		if err == nil {
+			defer destFile.Close()
+			_, _ = io.Copy(destFile, srcFile)
+		} else {
+			ui.Warnf("Failed to create local hooks binary: %v", err)
+		}
+	} else {
+		ui.Warnf("Failed to open source hooks binary for copying: %v", err)
+	}
+
+	hash := getWDHash(wd)
+
+	hooksJSONContent := fmt.Sprintf(`{
+  "fetch-latest-messages": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "multiplayer_ai_hook.exe pre %s %s"
+      }
+    ]
+  },
+  "post-invocation-handler": {
+    "PostInvocation": [
+      {
+        "type": "command",
+        "command": "multiplayer_ai_hook.exe post %s %s"
+      }
+    ]
+  }
+}
+`, sessionID, hash, sessionID, hash)
+
+	hooksJSONPath := filepath.Join(".agents", "hooks.json")
+	_ = os.WriteFile(hooksJSONPath, []byte(hooksJSONContent), 0644)
+	ui.Success("Local workspace AI lifecycle hooks initialized (.agents/hooks.json)")
+}
+
+func createWorkspaceRules(sessionID, sessionName, wd string) {
+	home, err := os.UserHomeDir()
+	var dbPath string
+	var hash string
+	if err == nil {
+		hash = getWDHash(wd)
+		dbDir := filepath.Join(home, ".mpai", "shared context", fmt.Sprintf("%s_%s", sessionID, hash))
+		dbPath = filepath.ToSlash(filepath.Join(dbDir, "multiplayer_ai.db"))
+	}
+
 	cursorRulesContent := fmt.Sprintf(`# Multiplayer AI Rules
 # This project is part of a live multiplayer session: %s.
+# Session ID: %s
+# Folder Hash: %s
+# DB Path: %s
 
-# You MUST consult the multiplayer-ai MCP server before starting tasks or proposing files changes.
-# Call the "get_session_messages" tool to synchronize your context with other participants.
-# Never skip checking the shared context.
-`, sessionName)
+## SYSTEM GUIDELINES:
+- Ignore the ".mpai" directory (located in the user home directory) entirely.
+- Do NOT read from, write to, or check the database/files in the ".mpai" directory.
+- Do NOT write, execute, or suggest scripts (like Python or shell scripts) to interact with the ".mpai" folder or the SQLite databases inside it.
+- Strictly ignore and do NOT read or parse the rules files (".cursorrules", ".clinerules", ".cursor/rules/multiplayer.mdc"), ".antigravityignore", ".agents/hooks.json", or anything in the "HooksModule" directory.
+`, sessionName, sessionID, hash, dbPath)
 
 	_ = os.WriteFile(".cursorrules", []byte(cursorRulesContent), 0644)
 	_ = os.WriteFile(".clinerules", []byte(cursorRulesContent), 0644)
 	_ = os.MkdirAll(".cursor/rules", 0755)
 	_ = os.WriteFile(".cursor/rules/multiplayer.mdc", []byte(cursorRulesContent), 0644)
+
+	antigravityIgnoreContent := `# Ignored by Google Antigravity
+.mpai/
+**/.mpai/**
+*.db
+*.log
+.cursorrules
+.clinerules
+.cursor/rules/multiplayer.mdc
+.agents/
+.agents/hooks.json
+.antigravityignore
+HooksModule/
+**/HooksModule/**
+`
+	_ = os.WriteFile(".antigravityignore", []byte(antigravityIgnoreContent), 0644)
+
+	createWorkspaceHooks(sessionID, wd)
 }
 
 func removeWorkspaceRules() {
 	_ = os.Remove(".cursorrules")
 	_ = os.Remove(".clinerules")
 	_ = os.Remove(".cursor/rules/multiplayer.mdc")
-	fmt.Println("\n✓ Local workspace AI rules cleaned up.")
+	_ = os.Remove(".antigravityignore")
+	_ = os.Remove(".agents/multiplayer_ai_hook.exe")
+	_ = os.Remove(".agents/fetch_latest_hook.exe")
+	_ = os.Remove(".agents/hooks.json")
+	ui.Success("Local workspace AI rules and hooks cleaned up.")
 }
 
 // RunSessionFlow starts the live interactive multiplayer session CLI.
@@ -55,33 +192,37 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 	service := NewSessionService(backend)
 	defer service.Close()
 
-	fmt.Printf("\nConnecting to live multiplayer session %s...\n", sessionID)
-	
+	ui.ConnectingMsg(sessionID)
+
 	// Fetch initial session info
+	connSpin := ui.NewSpinner("Fetching session metadata…")
 	sInfo, err := service.GetSessionInfo(sessionID)
 	if err != nil {
-		fmt.Printf("✗ Failed to get session info: %v\n\n", err)
+		connSpin.StopError(fmt.Sprintf("Failed to get session info: %v", err))
 		return
 	}
+	connSpin.Stop()
 
 	// Initialize active session context if engine is provided
 	if engine != nil {
 		localPath, _ := filepath.Abs(".")
 		err = engine.SetActiveSession(sInfo, userID, localPath)
 		if err != nil {
-			fmt.Printf("✗ Warning: Failed to set active session in SQLite: %v\n", err)
+			ui.Warnf("Failed to set active session in SQLite: %v", err)
 		}
 	}
 
 	// Connect to WS
+	wsSpin := ui.NewSpinner("Establishing WebSocket connection…")
 	msgChan, err := service.ConnectSession(sessionID, userID)
 	if err != nil {
-		fmt.Printf("✗ Connection failed: %v\n\n", err)
+		wsSpin.StopError(fmt.Sprintf("Connection failed: %v", err))
 		return
 	}
+	wsSpin.StopSuccess("Successfully connected to live session room!")
 
-	fmt.Println("✓ Successfully connected to live session room!")
-	fmt.Printf("Active Session Name: %s\n\n", sInfo.Name)
+	ui.Infof("Active Session: %s%s%s", ui.Bold+ui.BrightWhite, sInfo.Name, ui.Reset)
+	fmt.Println()
 
 	// Send CONTEXT_REQUEST to get session history from peers
 	reqMsg := WSMessage{
@@ -94,8 +235,8 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 	_ = service.SendWSMessage(reqMsg)
 
 	// Generate .cursorrules and .clinerules files
-	createWorkspaceRules(sInfo.Name)
-	fmt.Println("✓ Local workspace AI rules generated (.cursorrules, .clinerules, .cursor/rules/multiplayer.mdc)")
+	createWorkspaceRules(sessionID, sInfo.Name, ".")
+	ui.Success("Local workspace AI rules generated (.cursorrules, .clinerules, .cursor/rules/multiplayer.mdc)")
 
 	var watcher *HighPrecisionWatcher
 
@@ -108,7 +249,8 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 				return
 			case msg, ok := <-msgChan:
 				if !ok {
-					fmt.Println("\n[Live Session Alert] Connection closed by remote server.")
+					fmt.Println()
+					ui.Warn("[Live Session Alert] Connection closed by remote server.")
 					return
 				}
 				// Format incoming broadcast alerts nicely
@@ -136,7 +278,10 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 							for _, m := range msgs {
 								_ = engine.SaveAIMessage(m.ID, m.SessionID, m.SenderID, m.Modifier, m.Content, m.StepIndex, m.CreatedAt)
 							}
-							fmt.Printf("\n[Incoming Sync] Synchronized %d AI messages from session owner.\nSelect: ", len(msgs))
+							fmt.Printf("\n%s  ↓ Sync%s  Synchronized %d AI messages from session owner.\n%s  ›%s Select: ",
+								ui.BrightCyan+ui.Bold, ui.Reset,
+								len(msgs),
+								ui.BrightCyan, ui.Reset)
 						}
 					}
 				} else if msg.Type == "PATCH_BROADCAST" || msg.Status == "PATCH_BROADCAST" {
@@ -150,13 +295,21 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 									msgID := fmt.Sprintf("broadcast-%s-%d", msg.SenderID, time.Now().UnixNano())
 									_ = engine.SaveAIMessage(msgID, sessionID, msg.SenderID, patch.Modifier, patch.ContentDelta, -1, time.Now())
 								}
-								fmt.Printf("\n--- AI Broadcast Message from %s (via %s) ---\n%s\n---------------------------------------------\n",
-									msg.SenderID, patch.Modifier, patch.ContentDelta)
+								fmt.Printf("\n%s╭─ AI Broadcast%s  from %s%s%s  via %s%s%s\n%s│%s %s\n%s╰%s\n",
+									ui.BrightMagenta+ui.Bold, ui.Reset,
+									ui.BrightWhite+ui.Bold, msg.SenderID, ui.Reset,
+									ui.Dim, patch.Modifier, ui.Reset,
+									ui.BrightBlack, ui.Reset,
+									patch.ContentDelta,
+									ui.BrightBlack, ui.Reset,
+								)
 							}
 						}
 
 						if !isAiMsg {
-							fmt.Printf("\n[Incoming Sync] Applying remote patch from sender: %s\n", msg.SenderID)
+							fmt.Printf("\n%s  ↓ Patch%s  Applying remote patch from %s%s%s\n",
+								ui.BrightCyan+ui.Bold, ui.Reset,
+								ui.BrightWhite, msg.SenderID, ui.Reset)
 							for _, patch := range msg.Patches {
 								absPath, _ := filepath.Abs(patch.FilePathFromRoot)
 								if watcher != nil {
@@ -164,21 +317,24 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 								}
 								err := ApplyPatch(".", patch.FilePathFromRoot, patch.Operation, patch.IsWholeFile, patch.ContentDelta)
 								if err != nil {
-									fmt.Printf("   ✗ Failed to apply patch for %s: %v\n", patch.FilePathFromRoot, err)
+									ui.Errorf("  Failed to apply patch for %s: %v", patch.FilePathFromRoot, err)
 								} else {
-									fmt.Printf("   ✓ Successfully applied patch for %s\n", patch.FilePathFromRoot)
+									ui.Successf("  Applied patch for %s", patch.FilePathFromRoot)
 									if engine != nil {
 										changeID := fmt.Sprintf("fc-in-%s-%d", msg.SenderID, time.Now().UnixNano())
 										_ = engine.SaveFileChange(changeID, sessionID, msg.SenderID, patch.FilePathFromRoot, patch.Operation, patch.Modifier, patch.IsAiEdit, patch.ContentDelta, time.Now())
 									}
 								}
 							}
+							fmt.Printf("%s  ›%s Select: ", ui.BrightCyan, ui.Reset)
 						}
-						fmt.Print("Select: ")
 					}
 				} else if msg.Status != "" {
-					fmt.Printf("\n[Session Event] Status update: %s - %s\n\n", msg.Status, msg.Message)
-					fmt.Print("Select: ")
+					fmt.Printf("\n%s  ⚡ Event%s  Status update: %s%s%s — %s\n%s  ›%s Select: ",
+						ui.BrightYellow+ui.Bold, ui.Reset,
+						ui.BrightWhite, msg.Status, ui.Reset,
+						msg.Message,
+						ui.BrightCyan, ui.Reset)
 				}
 			}
 		}
@@ -236,7 +392,7 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 				// Watcher exited
 			}
 		}()
-		fmt.Println("✓ Real-time directory file synchronization watcher active!")
+		ui.Success("Real-time directory file synchronization watcher active!")
 	}
 
 	// Start AI Transcript Poller
@@ -269,17 +425,20 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 		pollerCancel = engine.StartPoller(context.Background(), sessionID, userID, ".", broadcastFn)
 	}
 
+	fmt.Println()
+
 	// Loop for session menu actions
 	for {
-		fmt.Printf("=== Active Session: %s ===\n", sInfo.Name)
-		fmt.Println("1. Show session details")
-		fmt.Println("2. Send simulated file patch")
-		fmt.Println("3. Leave session")
-		fmt.Print("Select: ")
+		ui.ActiveSessionHeader(sInfo.Name)
+		ui.SubMenuItem(1, "Show session details")
+		ui.SubMenuItem(2, "Send simulated file patch")
+		ui.SubMenuItem(3, "Leave session")
+		fmt.Println()
+		ui.Prompt("Select")
 
 		input, err := reader.ReadString('\n')
 		if err != nil {
-			fmt.Printf("Error reading input: %v\n", err)
+			ui.Errorf("Error reading input: %v", err)
 			break
 		}
 
@@ -287,43 +446,48 @@ func RunSessionFlow(userID string, sessionID string, baseHTTPURL string, engine 
 		switch choice {
 		case "1":
 			// Refresh info and print
+			refreshSpin := ui.NewSpinner("Refreshing session info…")
 			sInfo, err = service.GetSessionInfo(sessionID)
 			if err != nil {
-				fmt.Printf("Error refreshing session: %v\n\n", err)
+				refreshSpin.StopError(fmt.Sprintf("Error refreshing session: %v", err))
 			} else {
-				fmt.Println("\n--- Live Session Details ---")
-				fmt.Println(service.FormatSessionInfo(sInfo))
+				refreshSpin.Stop()
+				fmt.Println()
+				fmt.Print(service.FormatSessionInfo(sInfo))
 				fmt.Println()
 			}
 		case "2":
-			fmt.Print("\nEnter file path (e.g. main.go): ")
+			fmt.Println()
+			ui.Prompt("File path (e.g. main.go)")
 			pathInput, _ := reader.ReadString('\n')
 			filePath := strings.TrimSpace(pathInput)
 
-			fmt.Print("Enter patch content (e.g. + func main()): ")
+			ui.Prompt("Patch content (e.g. + func main())")
 			contentInput, _ := reader.ReadString('\n')
 			content := strings.TrimSpace(contentInput)
 
 			if filePath == "" || content == "" {
-				fmt.Println("Cancelled. Empty inputs not allowed.\n")
+				ui.Warn("Cancelled. Empty inputs not allowed.")
 				continue
 			}
 
+			patchSpin := ui.NewSpinner(fmt.Sprintf("Sending patch for %s…", filePath))
 			err := service.SendSimulatedPatch(sessionID, userID, filePath, content)
 			if err != nil {
-				fmt.Printf("✗ Failed to send patch: %v\n\n", err)
+				patchSpin.StopError(fmt.Sprintf("Failed to send patch: %v", err))
 			} else {
-				fmt.Println("✓ Patch sent successfully!\n")
+				patchSpin.StopSuccess("Patch sent successfully!")
 			}
+			fmt.Println()
 		case "3":
-			fmt.Println("Leaving session...")
+			ui.Info("Leaving session…")
 			close(stopPrintChan)
 			if pollerCancel != nil {
 				pollerCancel()
 			}
 			return
 		default:
-			fmt.Println("Invalid option.\n")
+			ui.Warn("Invalid option.")
 		}
 	}
 }

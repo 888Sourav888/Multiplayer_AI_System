@@ -150,6 +150,15 @@ func createTables(db *sql.DB) error {
 			created_at TEXT NOT NULL,
 			FOREIGN KEY(session_id) REFERENCES sessions(id)
 		);`,
+		`CREATE TABLE IF NOT EXISTS local_ai_messages (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			sender_id TEXT NOT NULL,
+			modifier TEXT NOT NULL,
+			content TEXT NOT NULL,
+			step_index INTEGER,
+			created_at TEXT NOT NULL
+		);`,
 	}
 
 	for _, q := range queries {

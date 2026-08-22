@@ -25,7 +25,7 @@ public class SessionPatchWebSocketController {
      */
     @MessageMapping("/session/{sessionId}/patch")
     public void receivePatch(
-            @DestinationVariable UUID sessionId,
+            @DestinationVariable("sessionId") UUID sessionId,
             @Valid @Payload PatchTransferRequest request) {
 
         // Ensure sessionId matches path variable

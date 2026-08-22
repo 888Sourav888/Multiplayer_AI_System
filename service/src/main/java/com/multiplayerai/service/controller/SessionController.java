@@ -41,7 +41,7 @@ public class SessionController {
      */
     @PostMapping(value = "/{sessionId}/persist", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<SnapshotResponse> persistSession(
-            @PathVariable UUID sessionId,
+            @PathVariable("sessionId") UUID sessionId,
             @RequestParam("file") MultipartFile file) {
         SnapshotResponse response = sessionService.persistSession(sessionId, file);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
@@ -53,7 +53,7 @@ public class SessionController {
      */
     @PatchMapping("/{sessionId}")
     public ResponseEntity<SessionResponse> updateSession(
-            @PathVariable UUID sessionId,
+            @PathVariable("sessionId") UUID sessionId,
             @Valid @RequestBody UpdateSessionRequest request) {
         SessionResponse response = sessionService.updateSession(sessionId, request);
         return ResponseEntity.ok(response);
@@ -64,7 +64,7 @@ public class SessionController {
      * Fully deletes the session from DB and cleans up server storage.
      */
     @DeleteMapping("/{sessionId}")
-    public ResponseEntity<Void> deleteSession(@PathVariable UUID sessionId) {
+    public ResponseEntity<Void> deleteSession(@PathVariable("sessionId") UUID sessionId) {
         sessionService.deleteSession(sessionId);
         return ResponseEntity.noContent().build();
     }
@@ -73,7 +73,7 @@ public class SessionController {
      * Get Session details by ID
      */
     @GetMapping("/{sessionId}")
-    public ResponseEntity<SessionResponse> getSession(@PathVariable UUID sessionId) {
+    public ResponseEntity<SessionResponse> getSession(@PathVariable("sessionId") UUID sessionId) {
         SessionResponse response = sessionService.getSession(sessionId);
         return ResponseEntity.ok(response);
     }
@@ -82,7 +82,7 @@ public class SessionController {
      * Get all snapshots metadata for a session
      */
     @GetMapping("/{sessionId}/snapshots")
-    public ResponseEntity<List<SnapshotResponse>> getSessionSnapshots(@PathVariable UUID sessionId) {
+    public ResponseEntity<List<SnapshotResponse>> getSessionSnapshots(@PathVariable("sessionId") UUID sessionId) {
         List<SnapshotResponse> response = sessionService.getSessionSnapshots(sessionId);
         return ResponseEntity.ok(response);
     }
@@ -102,7 +102,7 @@ public class SessionController {
      */
     @PostMapping("/{sessionId}/join")
     public ResponseEntity<SessionResponse> joinSession(
-            @PathVariable UUID sessionId,
+            @PathVariable("sessionId") UUID sessionId,
             @RequestParam("userId") UUID userId) {
         SessionResponse response = sessionService.joinSession(sessionId, userId);
         return ResponseEntity.ok(response);
@@ -114,8 +114,8 @@ public class SessionController {
      */
     @GetMapping("/{sessionId}/snapshots/{version}/download")
     public ResponseEntity<Resource> downloadSnapshot(
-            @PathVariable UUID sessionId,
-            @PathVariable Long version) {
+            @PathVariable("sessionId") UUID sessionId,
+            @PathVariable("version") Long version) {
         Resource resource = sessionService.loadSnapshotAsResource(sessionId, version);
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
