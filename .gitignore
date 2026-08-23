@@ -1,6 +1,8 @@
 # Built binaries & build output
 **/target/
 **/build/
+*.exe
+**/*.exe
 
 # Local File Storage (Uploaded session snapshots, blobs)
 **/data/
