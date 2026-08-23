@@ -23,14 +23,17 @@ The goal was to investigate whether multiple local AI workflows could behave lik
 
 ## 💡 What It Does
 
-Describe the project's capabilities from a user's/problem-solving perspective.
+* **Real-Time Workspace Sync:** Synchronizes file changes across participants in real time, keeping shared workspaces consistent.
 
-* **Real-time Workspace Sync:** Detects local file changes recursively via `fsnotify` and propagates line-level diffs to all participants over WebSockets, keeping workspaces synchronized in real-time.
-* **AI vs. Human Change Attribution:** Inspects OS process locks to determine if changes were made by a human developer or an AI agent (e.g., Cursor, Claude, Antigravity) and tags the broadcasted patch with the modifier.
-* **Shared Engineering Context:** Maintains a local-first SQLite database of conversation transcripts and file changes on each machine, synchronizing the history dynamically when new members join.
-* **Workspace AI Hooks Integration:** Integrates with coding agents using local post-invocation lifecycle hooks (`.agents/hooks.json` and Go-based `HooksModule`). After an AI tool executes, the hook runs to query the shared SQLite context and dynamically inject the latest transcript messages or updates back into the agent's view.
-* **Workspace Rule Injection:** Dynamically writes configuration rules (like `.cursorrules`, `.clinerules`, `.cursor/rules/multiplayer.mdc`, and `.agents/hooks.json`) when joining a session, directing the user's AI to consult the shared context before acting.
-* **Flexible Initialization Protocol:** Automatically aligns developers on Git branches or handles secure ZIP snapshot transfers (with Zip Slip path traversal checks) for non-Git projects.
+* **Change Attribution:** Identifies whether a change originated from a developer or an AI coding agent and preserves that attribution across the session.
+
+* **Shared AI Context:** Maintains and synchronizes conversation history and workspace changes, giving participants a shared view of the ongoing work.
+
+* **AI Context Integration:** Connects local AI coding tools to the shared context, allowing agents to access relevant work and decisions made by other participants.
+
+* **Automatic Agent Configuration:** Configures supported AI tools when joining a session so they can participate in the shared workflow without manual setup.
+
+* **Workspace Initialization:** Automatically brings new participants up to date through Git-based synchronization or secure workspace snapshots.
 
 ---
 
@@ -103,73 +106,6 @@ graph TB
 
 ---
 
-## 🧠 Engineering Decisions
-
-This is one of the **most important sections for a resume project**.
-
-### Why Go for the Client?
-Go was chosen for the client application due to its portability, performance, and low-level system integration capability. It compiles into a single, dependency-free binary, which simplifies local deployment and integration with IDEs. Using `fsnotify` allows us to recursively monitor the filesystem with minimal OS resources, and Go's concurrency model (goroutines and channels) handles high-frequency WebSocket messaging and file watching efficiently.
-
-### Why Spring Boot for the Backend?
-The backend needs a robust, scalable structure to manage session states, multipart snapshot uploads, and real-time messaging. Spring Boot provides first-class support for WebSockets, standard REST APIs, and an in-process event bus (`ApplicationEvent`). This allows us to cleanly decouple message reception from database persistence and broadcast logic via the Observer pattern.
-
-### Why Architecture Y? (Local-first SQLite + WebSocket Relay)
-Instead of centralizing the session's AI conversation logs on a remote server, we synchronize and query them from local SQLite databases:
-* **Microsecond Reads:** The local post-invocation hook queries the context database. Reading from local SQLite takes microseconds, whereas remote API queries would introduce hundreds of milliseconds of latency, avoiding delays in workspace updates.
-* **Privacy:** AI conversation content remains on developers' local machines. The central server only relays patches and logs metadata, never storing full conversational reasoning steps.
-* **Offline Access:** Developers can review local workspace history and run code changes even during intermittent network disconnections.
-
-### Trade-offs
-* **LCS Diffs vs. Whole-File Overwrites:** Computing line-level Longest Common Subsequence (LCS) diffs adds CPU overhead on the client, but it keeps WebSocket payloads extremely small. We trade slight compute on the developer's machine for minimal bandwidth usage and faster remote sync.
-* **Last-Write-Wins (LWW) vs. Operational Transformation (OT):** To keep the implementation practical, we use an ignore-window to prevent echo loops and resolve conflicts via LWW. While OT provides concurrent collaborative editing, it adds massive complexity. Since developers usually work on separate files or coordinate using the AI's shared context, LWW is a practical compromise.
-
----
-
-## 🔥 Interesting Engineering Problems
-
-Highlight the parts that were genuinely difficult or interesting.
-
-### Problem 1 — AI vs. Human Change Attribution
-
-**Challenge:**
-The local filesystem watcher triggers on every file write, but we must distinguish between edits made by the developer and those made by the local AI agent (and identify which agent, e.g., Cursor, Claude, Antigravity). Without this, we cannot flag patches with `isAiEdit` or log context appropriately.
-
-**Approach:**
-Upon detecting a file modification, the watcher queries the operating system's process table to check which active processes hold a write lock on the modified file. It resolves the process name and compares it against a known list of AI tool process executables (such as `claude.exe`, `cursor.exe`, `antigravity.exe`).
-
-**Why this approach:**
-It avoids having to build plugins for every individual IDE or agent. Using non-intrusive OS-level process locking inspects the system state transparently without changing developer toolchains.
-
----
-
-### Problem 2 — Echo Loop Suppression in Filesystem Synced Workspace
-
-**Challenge:**
-When Client A modifies a file, it broadcasts the patch to Client B. When Client B applies the patch by writing the file to disk, Client B's filesystem watcher fires. Without intervention, Client B would broadcast the same change back to Client A, causing a recursive, infinite network storm (echo loop).
-
-**Approach:**
-We implemented an incoming patch ignore-window. When Client B writes a received remote patch to disk, it registers that file path in a temporary thread-safe cache with a 2-second ignore TTL. The local watcher checks this cache before processing any write events, skipping any matches.
-
-**Result:**
-It provides a simple, stateless solution to the echo loop problem without needing distributed locks or central sequence ordering on the backend.
-
----
-
-## ⚡ Performance / Results
-
-Quantify things wherever possible.
-
-| Metric | Result |
-| --- | --- |
-| **Average Sync Latency** | < 100ms (LAN / Localhost WebSocket loop) |
-| **Polling Frequency** | 1.5 seconds (Antigravity conversation log) |
-| **Echo Suppression Window** | 2.0 seconds |
-| **Max Snapshot File Size** | 5 MB (Multipart zip for non-Git workspace) |
-| **Active Session Limit** | Max 10 active sessions per owner |
-| **Join Context Sync Limit** | Chronological replay of last 100 AI messages |
-
----
-
 ## 🛠️ Tech Stack
 
 **Languages:** Go, Java
@@ -183,10 +119,7 @@ Quantify things wherever possible.
 **Workspace Tools:** Git integration, ZIP compression utilities
 
 ---
-
 ## 🔄 How It Works
-
-Explain one representative flow from beginning to end.
 
 ```text
 File Changed (User/AI Edit)
@@ -325,30 +258,9 @@ cd service
 
 ---
 
-## 🔮 Future Improvements
-
-Only mention **realistic extensions**.
+## 🔮 List of Items Planned to be Added in Future
 
 * **Patch Ordering & Causal Guarantees:** Implement server-side sequence numbering or vector clocks to guarantee correct causal ordering when multiple developers edit concurrently.
 * **Missed-Event Replay:** Build a checkpoint-based event log on the server so that clients reclaiming connection after a network drop can catch up on missing patches.
 * **Cross-Instance Event Routing:** Integrate Redis Streams to support routing WebSocket broadcasts across multiple containerized instances of the Spring Boot backend.
 * **Change Voting/Approval Workflows:** Add a CLI/UI prompt allowing developers to approve or reject incoming AI edits before they are automatically applied to their active directories.
-
----
-
-## 📚 What I Learned
-
-This is optional, but useful for personal projects.
-
-* **Designing Idempotent Sync Pipelines:** Designed local-first replication patterns using SQLite `INSERT OR IGNORE` and transaction logs to synchronize agent memories without duplicate side-effects.
-* **OS-Level Process Locking Inspection:** Interfaced with Windows and Unix system APIs in Go to inspect filesystem lock ownership, achieving process-level attribution of edits in real time.
-* **Handling Concurrent State Updates:** Designed stateful debounce and path-ignore windows to break infinite broadcast loops in peer-to-peer workspace replication.
-* **Decoupling Event-Driven Systems:** Utilized Spring `ApplicationEvent` and Observer patterns to decouple WebSocket broadcast loops from transactional persistence pipelines.
-
----
-
-## 👨💻 Author
-
-**Sourav**
-
-[LinkedIn] · [GitHub](https://github.com/888Sourav888) · [Portfolio]
